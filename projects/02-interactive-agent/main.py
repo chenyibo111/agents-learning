@@ -1,0 +1,126 @@
+import json
+import os
+from typing import Any
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+load_dotenv()
+
+
+def add_numbers(a: float, b: float) -> float:
+    return a + b
+
+
+def multiply_numbers(a: float, b: float) -> float:
+    return a * b
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "add_numbers",
+            "description": "计算两个数字的和。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number", "description": "第一个数字"},
+                    "b": {"type": "number", "description": "第二个数字"},
+                },
+                "required": ["a", "b"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multiply_numbers",
+            "description": "计算两个数字的乘积。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number", "description": "第一个数字"},
+                    "b": {"type": "number", "description": "第二个数字"},
+                },
+                "required": ["a", "b"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+
+
+def call_tool(name: str, arguments: dict[str, Any]) -> str:
+    a = float(arguments["a"])
+    b = float(arguments["b"])
+
+    if name == "add_numbers":
+        return str(add_numbers(a, b))
+    if name == "multiply_numbers":
+        return str(multiply_numbers(a, b))
+    raise ValueError(f"未知工具: {name}")
+
+
+def main() -> None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL")
+    base_url = os.getenv("OPENAI_BASE_URL") or None
+
+    if not api_key or api_key.startswith("replace-"):
+        raise RuntimeError("请先在 .env 中设置 OPENAI_API_KEY")
+    if not model or model.startswith("replace-"):
+        raise RuntimeError("请先在 .env 中设置 OPENAI_MODEL")
+
+    user_task = input("请输入任务：").strip()
+    if not user_task:
+        raise ValueError("任务不能为空")
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": (
+                "你是一个学习用 Agent。"
+                "需要进行加法或乘法时，必须优先调用对应工具。"
+            ),
+        },
+        {"role": "user", "content": user_task},
+    ]
+
+    for step in range(3):
+        print(f"\n--- step {step + 1} ---")
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
+        message = response.choices[0].message
+        messages.append(message.model_dump(exclude_none=True))
+
+        if not message.tool_calls:
+            print(message.content or "没有返回文本。")
+            return
+
+        for tool_call in message.tool_calls:
+            name = tool_call.function.name
+            arguments = json.loads(tool_call.function.arguments)
+            print(f"调用工具: {name}({arguments})")
+            result = call_tool(name, arguments)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result,
+                }
+            )
+
+    raise RuntimeError("超过最大步数，Agent 可能陷入循环。")
+
+
+if __name__ == "__main__":
+    main()
+
