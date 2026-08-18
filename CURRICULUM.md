@@ -10,7 +10,7 @@
 - 🟡 已生成代码，等待学习和运行；
 - ⬜ 后续规划。
 
-截至 2026-08-18，课程已推进到第 24 课；第 24 课已完成讲解、依赖安装、离线 Demo、测试和网关兼容性修复验证。
+截至 2026-08-18，课程已推进到第 26 课；第 1～25 课均标记为已完成，第 26 课已开始学习。
 
 ## 阶段 0：学习方法与开发环境
 
@@ -48,21 +48,21 @@
 
 | 编号 | 课程 | 核心内容 | 项目/笔记 | 状态 |
 |---|---|---|---|---|
-| 17 | Agent 状态管理与可恢复工作流 | 状态机、检查点、失败恢复 | [17-agent-state](projects/17-agent-state/) | 🟡 |
-| 18 | 结构化输出与结果校验 | JSON Schema、字段校验、自动修复 | [18-structured-output](projects/18-structured-output/) | 🟡 |
-| 19 | 可靠工具执行 | 参数校验、重试、超时、幂等性 | [19-reliable-tool-execution](projects/19-reliable-tool-execution/) | 🟡 |
-| 20 | 工作流编排 | 顺序、条件、并行、人工确认节点 | [20-workflow-orchestration](projects/20-workflow-orchestration/) | 🟡 |
-| 21 | Agent 安全与权限控制 | Prompt Injection、权限边界、敏感操作确认 | [21-agent-security](projects/21-agent-security/) | 🟡 |
-| 22 | 可观测性与成本控制 | 日志、Tracing、Token、延迟、失败率 | [22-observability-cost-control](projects/22-observability-cost-control/) | 🟡 |
+| 17 | Agent 状态管理与可恢复工作流 | 状态机、检查点、失败恢复 | [17-agent-state](projects/17-agent-state/) | ✅ |
+| 18 | 结构化输出与结果校验 | JSON Schema、字段校验、自动修复 | [18-structured-output](projects/18-structured-output/) | ✅ |
+| 19 | 可靠工具执行 | 参数校验、重试、超时、幂等性 | [19-reliable-tool-execution](projects/19-reliable-tool-execution/) | ✅ |
+| 20 | 工作流编排 | 顺序、条件、并行、人工确认节点 | [20-workflow-orchestration](projects/20-workflow-orchestration/) | ✅ |
+| 21 | Agent 安全与权限控制 | Prompt Injection、权限边界、敏感操作确认 | [21-agent-security](projects/21-agent-security/) | ✅ |
+| 22 | 可观测性与成本控制 | 日志、Tracing、Token、延迟、失败率 | [22-observability-cost-control](projects/22-observability-cost-control/) | ✅ |
 
 ## 阶段 4：协议、框架与多 Agent
 
 | 编号 | 课程 | 核心内容 | 项目/笔记 | 状态 |
 |---|---|---|---|---|
-| 23 | Agent 通信与工具协议 | 工具协议、资源协议、协议边界 | [23-agent-protocol](projects/23-agent-protocol/) / [课程笔记](lessons/23-agent-protocol.md) | 🟡 |
+| 23 | Agent 通信与工具协议 | 工具协议、资源协议、协议边界 | [23-agent-protocol](projects/23-agent-protocol/) / [课程笔记](lessons/23-agent-protocol.md) | ✅ |
 | 24 | 用 smolagents 重写 Agent | 轻量级 Agent 框架对比 | [24-smolagents-agent](projects/24-smolagents-agent/) / [课程笔记](lessons/24-smolagents.md) | ✅ |
-| 25 | 用 LangGraph 管理状态 | 图工作流、节点、边、持久化 | 待创建 | ⬜ |
-| 26 | 多 Agent 协作 | 角色分工、任务委派、结果汇总 | 待创建 | ⬜ |
+| 25 | 用 LangGraph 管理状态 | 图工作流、节点、边、持久化 | [25-langgraph-state](projects/25-langgraph-state/) / [课程笔记](lessons/25-langgraph.md) | ✅ |
+| 26 | 多 Agent 协作 | 角色分工、任务委派、结果汇总 | [26-multi-agent-collaboration](projects/26-multi-agent-collaboration/) / [课程笔记](lessons/26-multi-agent-collaboration.md) | 🟡 |
 
 ## 阶段 5：完整项目——个人研究助手
 

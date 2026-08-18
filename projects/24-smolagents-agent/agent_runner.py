@@ -83,6 +83,6 @@ def build_agent_from_env(max_steps: int = 6) -> Any:
         api_key=os.getenv("OPENAI_API_KEY", ""),
         model_id=os.getenv("OPENAI_MODEL", ""),
         api_base=os.getenv("OPENAI_BASE_URL"),
-        tool_choice=os.getenv("OPENAI_TOOL_CHOICE", "required"),
+        tool_choice=os.getenv("OPENAI_TOOL_CHOICE", "auto"),
         max_steps=max_steps,
     )
