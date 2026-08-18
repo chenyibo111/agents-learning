@@ -6,4 +6,5 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 projects/*/session*.json
+projects/*/workflow-state.json
 projects/*/vector_store/

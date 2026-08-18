@@ -49,11 +49,11 @@
 | 编号 | 课程 | 核心内容 | 项目/笔记 | 状态 |
 |---|---|---|---|---|
 | 17 | Agent 状态管理与可恢复工作流 | 状态机、检查点、失败恢复 | [17-agent-state](projects/17-agent-state/) | 🟡 |
-| 18 | 结构化输出与结果校验 | JSON Schema、字段校验、自动修复 | 待创建 | ⬜ |
-| 19 | 可靠工具执行 | 参数校验、重试、超时、幂等性 | 待创建 | ⬜ |
-| 20 | 工作流编排 | 顺序、条件、并行、人工确认节点 | 待创建 | ⬜ |
-| 21 | Agent 安全与权限控制 | Prompt Injection、权限边界、敏感操作确认 | 待创建 | ⬜ |
-| 22 | 可观测性与成本控制 | 日志、Tracing、Token、延迟、失败率 | 待创建 | ⬜ |
+| 18 | 结构化输出与结果校验 | JSON Schema、字段校验、自动修复 | [18-structured-output](projects/18-structured-output/) | 🟡 |
+| 19 | 可靠工具执行 | 参数校验、重试、超时、幂等性 | [19-reliable-tool-execution](projects/19-reliable-tool-execution/) | 🟡 |
+| 20 | 工作流编排 | 顺序、条件、并行、人工确认节点 | [20-workflow-orchestration](projects/20-workflow-orchestration/) | 🟡 |
+| 21 | Agent 安全与权限控制 | Prompt Injection、权限边界、敏感操作确认 | [21-agent-security](projects/21-agent-security/) | 🟡 |
+| 22 | 可观测性与成本控制 | 日志、Tracing、Token、延迟、失败率 | [22-observability-cost-control](projects/22-observability-cost-control/) | 🟡 |
 
 ## 阶段 4：协议、框架与多 Agent
 

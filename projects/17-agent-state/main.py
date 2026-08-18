@@ -1,13 +1,14 @@
 import argparse
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 
 load_dotenv()
@@ -24,6 +25,41 @@ VALID_STATUSES = {
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+def is_retryable_error(error: Exception) -> bool:
+    if isinstance(error, (APIConnectionError, APITimeoutError, RateLimitError)):
+        return True
+    return getattr(error, "status_code", None) in RETRYABLE_STATUS_CODES
+
+
+def retry_with_backoff(
+    operation: Callable[[], Any],
+    operation_name: str,
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+) -> Any:
+    if max_attempts < 1:
+        raise ValueError("max_attempts 必须至少为 1")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return operation()
+        except Exception as error:
+            if not is_retryable_error(error) or attempt == max_attempts:
+                raise
+
+            delay = base_delay * (2 ** (attempt - 1))
+            print(
+                f"{operation_name}暂时失败，{delay:g} 秒后重试 "
+                f"（第 {attempt}/{max_attempts} 次尝试，错误类型：{type(error).__name__}）"
+            )
+            time.sleep(delay)
+
+    raise RuntimeError("重试流程异常结束")
 
 
 @dataclass
@@ -87,20 +123,23 @@ def parse_json_array(content: str) -> list[str]:
 
 
 def create_plan(client: OpenAI, model: str, task: str) -> list[str]:
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "你是任务规划器。把用户任务拆成 1 到 5 个可以顺序执行的步骤。"
-                    "每个步骤应该是清晰的行动，不要写解释。"
-                    "只返回 JSON 字符串数组。"
-                ),
-            },
-            {"role": "user", "content": task},
-        ],
-        temperature=0.2,
+    response = retry_with_backoff(
+        lambda: client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是任务规划器。把用户任务拆成 1 到 5 个可以顺序执行的步骤。"
+                        "每个步骤应该是清晰的行动，不要写解释。"
+                        "只返回 JSON 字符串数组。"
+                    ),
+                },
+                {"role": "user", "content": task},
+            ],
+            temperature=0.2,
+        ),
+        "生成任务计划",
     )
     content = response.choices[0].message.content or "[]"
     return parse_json_array(content)
@@ -116,27 +155,30 @@ def execute_step(
         f"步骤 {item['step']}: {item['result']}"
         for item in state.results
     ) or "暂无已完成步骤。"
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "你是一个执行工作流步骤的 Agent。"
-                    "只处理当前步骤，不要假装完成其他步骤。"
-                    "输出简洁的步骤结果。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"总任务：{state.task}\n"
-                    f"当前步骤：{step}\n"
-                    f"之前结果：\n{previous_results}"
-                ),
-            },
-        ],
-        temperature=0.2,
+    response = retry_with_backoff(
+        lambda: client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个执行工作流步骤的 Agent。"
+                        "只处理当前步骤，不要假装完成其他步骤。"
+                        "输出简洁的步骤结果。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"总任务：{state.task}\n"
+                        f"当前步骤：{step}\n"
+                        f"之前结果：\n{previous_results}"
+                    ),
+                },
+            ],
+            temperature=0.2,
+        ),
+        "执行工作流步骤",
     )
     return response.choices[0].message.content or "当前步骤没有返回结果。"
 
@@ -150,22 +192,25 @@ def review_results(
         f"步骤 {item['step']}: {item['result']}"
         for item in state.results
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "你是任务审查器。根据已完成步骤整理最终答案。"
-                    "如果结果中存在明显缺失，请明确指出，不要编造。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"总任务：{state.task}\n执行结果：\n{results}",
-            },
-        ],
-        temperature=0.2,
+    response = retry_with_backoff(
+        lambda: client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是任务审查器。根据已完成步骤整理最终答案。"
+                        "如果结果中存在明显缺失，请明确指出，不要编造。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"总任务：{state.task}\n执行结果：\n{results}",
+                },
+            ],
+            temperature=0.2,
+        ),
+        "审查工作流结果",
     )
     return response.choices[0].message.content or "审查没有返回结果。"
 
@@ -214,6 +259,8 @@ def run_demo() -> None:
     save_state(state)
     change_status(state, "executing")
     for index, step in enumerate(state.steps, start=1):
+        # if index == 3:
+        #     raise ValueError("主动抛出错误")
         state.results.append(
             {
                 "step": index,
@@ -282,4 +329,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
