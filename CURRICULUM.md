@@ -10,7 +10,7 @@
 - 🟡 已生成代码，等待学习和运行；
 - ⬜ 后续规划。
 
-截至 2026-08-18，课程已推进到第 26 课；第 1～25 课均标记为已完成，第 26 课已开始学习。
+截至 2026-08-19，课程已推进到第 30 课；第 1～27 课已完成，第 28～30 课正在学习。
 
 ## 阶段 0：学习方法与开发环境
 
@@ -62,16 +62,16 @@
 | 23 | Agent 通信与工具协议 | 工具协议、资源协议、协议边界 | [23-agent-protocol](projects/23-agent-protocol/) / [课程笔记](lessons/23-agent-protocol.md) | ✅ |
 | 24 | 用 smolagents 重写 Agent | 轻量级 Agent 框架对比 | [24-smolagents-agent](projects/24-smolagents-agent/) / [课程笔记](lessons/24-smolagents.md) | ✅ |
 | 25 | 用 LangGraph 管理状态 | 图工作流、节点、边、持久化 | [25-langgraph-state](projects/25-langgraph-state/) / [课程笔记](lessons/25-langgraph.md) | ✅ |
-| 26 | 多 Agent 协作 | 角色分工、任务委派、结果汇总 | [26-multi-agent-collaboration](projects/26-multi-agent-collaboration/) / [课程笔记](lessons/26-multi-agent-collaboration.md) | 🟡 |
+| 26 | 多 Agent 协作 | 角色分工、任务委派、结果汇总 | [26-multi-agent-collaboration](projects/26-multi-agent-collaboration/) / [课程笔记](lessons/26-multi-agent-collaboration.md) | ✅ |
 
 ## 阶段 5：完整项目——个人研究助手
 
 | 编号 | 课程 | 核心内容 | 项目/笔记 | 状态 |
 |---|---|---|---|---|
-| 27 | 研究助手需求与架构 | 需求拆解、模块边界、数据流 | 待创建 | ⬜ |
-| 28 | 资料采集与本地知识库 | 文件导入、网页资料、索引更新 | 待创建 | ⬜ |
-| 29 | 研究任务工作流 | 规划、检索、提取、核验 | 待创建 | ⬜ |
-| 30 | 带引用的 Markdown 报告 | 引用、证据链、报告模板 | 待创建 | ⬜ |
+| 27 | 研究助手需求与架构 | 需求拆解、模块边界、数据流、双运行时 | [27-research-assistant](projects/27-research-assistant/) / [课程笔记](lessons/27-research-assistant-architecture.md) | ✅ |
+| 28 | 资料采集与本地知识库 | 文件导入、关键词检索、向量检索、索引更新 | [28-document-retrieval](projects/28-document-retrieval/) / [课程笔记](lessons/28-document-retrieval.md) | 🟡 |
+| 29 | 研究任务工作流 | 规划、检索、提取、核验 | [29-research-task-workflow](projects/29-research-task-workflow/) / [课程笔记](lessons/29-research-task-workflow.md) | 🟡 |
+| 30 | 带引用的 Markdown 报告 | 引用、证据链、报告模板 | [30-cited-markdown-report](projects/30-cited-markdown-report/) / [课程笔记](lessons/30-cited-markdown-report.md) | 🟡 |
 | 31 | 历史任务与人工确认 | 任务持久化、高风险操作确认 | 待创建 | ⬜ |
 | 32 | 最终评测与部署 | 回归测试、监控、部署和项目展示 | 待创建 | ⬜ |
 
