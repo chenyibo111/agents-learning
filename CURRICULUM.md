@@ -10,7 +10,7 @@
 - 🟡 已生成代码，等待学习和运行；
 - ⬜ 后续规划。
 
-截至 2026-08-19，课程已推进到第 31 课；第 1～30 课已完成，第 31 课正在学习。
+截至 2026-08-21，第 00～32 课全部完成。
 
 ## 阶段 0：学习方法与开发环境
 
@@ -72,8 +72,8 @@
 | 28 | 资料采集与本地知识库 | 文件导入、关键词检索、向量检索、索引更新 | [28-document-retrieval](projects/28-document-retrieval/) / [课程笔记](lessons/28-document-retrieval.md) | ✅ |
 | 29 | 研究任务工作流 | 规划、检索、提取、核验 | [29-research-task-workflow](projects/29-research-task-workflow/) / [课程笔记](lessons/29-research-task-workflow.md) | ✅ |
 | 30 | 带引用的 Markdown 报告 | 引用、证据链、报告模板 | [30-cited-markdown-report](projects/30-cited-markdown-report/) / [课程笔记](lessons/30-cited-markdown-report.md) | ✅ |
-| 31 | 历史任务与人工确认 | 任务持久化、高风险操作确认 | [31-task-history-approval](projects/31-task-history-approval/) / [课程笔记](lessons/31-task-history-approval.md) | 🟡 |
-| 32 | 最终评测与部署 | 回归测试、监控、部署和项目展示 | 待创建 | ⬜ |
+| 31 | 历史任务与人工确认 | 任务持久化、高风险操作确认 | [31-task-history-approval](projects/31-task-history-approval/) / [课程笔记](lessons/31-task-history-approval.md) | ✅ |
+| 32 | 最终评测与部署 | 回归测试、监控、部署和项目展示 | [32-final-evaluation-deployment](projects/32-final-evaluation-deployment/) / [课程笔记](lessons/32-final-evaluation-deployment.md) | ✅ |
 
 ## 每课完成标准
 
