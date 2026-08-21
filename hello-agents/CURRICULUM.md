@@ -11,19 +11,21 @@
 
 | 章节 | 主题 | achieve 对应内容 | 状态 | 课程笔记 |
 |---|---|---|---|---|
-| 01 | 初识智能体 | 第 1～3 课 | 🔁 | [课程笔记](lessons/01-agent-basics.md) |
-| 02 | 智能体发展史 | 无系统对应 | 🆕 | 待创建 |
-| 03 | 大语言模型基础 | 第 1 课部分内容 | 🔁 | 待创建 |
-| 04 | ReAct、Plan-and-Solve、Reflection | 第 3、17、20 课 | 🔁 | 待创建 |
-| 05 | Coze、Dify、n8n 低代码平台 | 概念讨论 | 🔁 | 待创建 |
-| 06 | AutoGen、AgentScope、LangGraph | 第 23～26 课 | 🔁 | 待创建 |
-| 07 | 从零构建 Agent 框架 | 第 1～3 课有原理基础 | 🔁 | 待创建 |
-| 08 | Memory 与 RAG | 第 4～16 课 | ✅ | 待创建 |
-| 09 | 上下文工程 | 第 16、22 课 | 🔁 | 待创建 |
-| 10 | MCP、A2A、ANP | 第 23 课 | 🔁 | 待创建 |
-| 11 | Agentic-RL | 无对应课程 | 🆕 | 待创建 |
-| 12 | Agent 性能评估 | 第 13、22、32 课 | 🔁 | 待创建 |
-| 13 | 智能旅行助手 | 无对应课程 | 🆕 | 待创建 |
-| 14 | DeepResearch Agent | 第 27～32 课有相近项目 | 🔁 | 待创建 |
-| 15 | 赛博小镇 Agent | 无对应课程 | 🆕 | 待创建 |
-| 16 | 毕业设计 | 第 27～32 课有研究助手基础 | 🔁 | 待创建 |
+| 01 | 初识智能体 | 第 1～3 课 | 🔁 | [课程笔记](lessons/01-agent-basics.md) / [实践](projects/01-agent-basics/README.md) |
+| 02 | 智能体发展史 | 无系统对应 | 🆕 | [课程笔记](lessons/02-agent-history.md) / [实践](projects/02-agent-history/README.md) |
+| 03 | 大语言模型基础 | 第 1 课部分内容 | 🔁 | [课程笔记](lessons/03-llm-foundation.md) / [实践](projects/03-llm-foundation/README.md) |
+| 04 | ReAct、Plan-and-Solve、Reflection | 第 3、17、20 课 | 🔁 | [课程笔记](lessons/04-agent-patterns.md) / [实践](projects/04-agent-patterns/README.md) |
+| 05 | Coze、Dify、n8n 低代码平台 | 概念讨论 | 🔁 | [课程笔记](lessons/05-low-code-platforms.md) / [实践](projects/05-low-code-platforms/README.md) |
+| 06 | AutoGen、AgentScope、LangGraph | 第 23～26 课 | 🔁 | [课程笔记](lessons/06-agent-frameworks.md) / [实践](projects/06-agent-frameworks/README.md) |
+| 07 | 从零构建 Agent 框架 | 第 1～3 课有原理基础 | 🔁 | [课程笔记](lessons/07-build-agent-framework.md) / [实践](projects/07-build-agent-framework/README.md) |
+| 08 | Memory 与 RAG | 第 4～16 课 | ✅ | [课程笔记](lessons/08-memory-and-rag.md) / [实践](projects/08-memory-and-rag/README.md) |
+| 09 | 上下文工程 | 第 16、22 课 | 🔁 | [课程笔记](lessons/09-context-engineering.md) / [实践](projects/09-context-engineering/README.md) |
+| 10 | MCP、A2A、ANP | 第 23 课 | 🔁 | [课程笔记](lessons/10-agent-protocols.md) / [实践](projects/10-agent-protocols/README.md) |
+| 11 | Agentic-RL | 无对应课程 | 🆕 | [课程笔记](lessons/11-agentic-rl.md) / [实践](projects/11-agentic-rl/README.md) |
+| 12 | Agent 性能评估 | 第 13、22、32 课 | 🔁 | [课程笔记](lessons/12-agent-evaluation.md) / [实践](projects/12-agent-evaluation/README.md) |
+| 13 | 智能旅行助手 | 无对应课程 | 🆕 | [课程笔记](lessons/13-travel-assistant.md) / [实践](projects/13-travel-assistant/README.md) |
+| 14 | DeepResearch Agent | 第 27～32 课有相近项目 | 🔁 | [课程笔记](lessons/14-deep-research.md) / [实践](projects/14-deep-research/README.md) |
+| 15 | 赛博小镇 Agent | 无对应课程 | 🆕 | [课程笔记](lessons/15-cyber-town.md) / [实践](projects/15-cyber-town/README.md) |
+| 16 | 毕业设计 | 第 27～32 课 | 🔁 | [课程笔记](lessons/16-graduation-project.md) / [实践](projects/16-graduation-project/README.md) |
+
+> 内容状态：本表中的课程笔记和项目入口已生成；“学习状态”仍表示相对于 `achieve/` 的知识基础，不等于本人已经完成新路线学习。
