@@ -1,6 +1,7 @@
 """第一课的真实 OpenAI-compatible tool-calling Agent。"""
 
 import json
+import time
 from typing import Any
 
 from common import LLMConfigurationError, load_config
@@ -23,6 +24,7 @@ def run_llm(task: str, *, max_steps: int = 5) -> AgentResult:
         {"role": "user", "content": task},
     ]
     tool_names: list[str] = []
+    events: list[dict[str, Any]] = []
     for step in range(1, max_steps + 1):
         response = client.chat.completions.create(
             model=config.model,
@@ -36,11 +38,28 @@ def run_llm(task: str, *, max_steps: int = 5) -> AgentResult:
         }
         messages.append(dumped)
         if not message.tool_calls:
-            return AgentResult(answer=message.content or "没有返回文本。", steps=step, tool_names=tool_names, messages=messages)
+            return AgentResult(
+                answer=message.content or "没有返回文本。",
+                steps=step,
+                tool_names=tool_names,
+                messages=messages,
+                events=events,
+            )
         for tool_call in message.tool_calls:
             name = tool_call.function.name
             arguments = json.loads(tool_call.function.arguments)
+            started_at = time.perf_counter()
             observation = execute_tool_safely(name, arguments)
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
             tool_names.append(name)
+            events.append(
+                {
+                    "step": len(events) + 1,
+                    "tool": name,
+                    "arguments": dict(arguments),
+                    "observation": observation,
+                    "duration_ms": duration_ms,
+                }
+            )
             messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": observation})
     raise RuntimeError(f"超过最大步数 {max_steps}，Agent 可能陷入循环。")

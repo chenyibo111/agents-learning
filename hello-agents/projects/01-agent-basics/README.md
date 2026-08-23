@@ -21,6 +21,10 @@ cd /Users/yibo.chen/project/agents-learning
 .venv311/bin/python hello-agents/projects/01-agent-basics/main.py --demo
 .venv311/bin/python hello-agents/projects/01-agent-basics/main.py --demo \
   --task "先计算 8 加 4，再把结果乘以 3"
+
+# 查看结构化工具事件
+.venv311/bin/python hello-agents/projects/01-agent-basics/main.py --demo \
+  --task "先计算 8 加 4，再把结果乘以 3" --events
 ```
 
 预期可以看到类似结果：
@@ -72,4 +76,4 @@ Python：校验工具名和参数、执行工具、回传 observation、限制�
 .venv311/bin/python -m unittest discover -s hello-agents/tests -p 'test_*.py' -v
 ```
 
-完成标准：第一条命令的 5 个第一课测试通过，第二条命令的全部课程测试通过，并且你能解释一次两步任务中 state、tool observation 和 max_steps 的作用。
+完成标准：第一条命令的 7 个第一课测试通过，第二条命令的全部课程测试通过，并且你能解释一次两步任务中 state、tool observation、events 和 max_steps 的作用。

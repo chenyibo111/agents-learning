@@ -20,11 +20,37 @@ class AgentBasicsTests(unittest.TestCase):
 
     def test_number_tools_have_descriptions_and_required_arguments(self):
         names = {item["function"]["name"] for item in self.agent.TOOLS}
-        self.assertEqual({"add_numbers", "multiply_numbers", "divide_numbers"}, names)
+        self.assertEqual({"add_numbers", "subtract_numbers", "multiply_numbers", "divide_numbers"}, names)
         for item in self.agent.TOOLS:
             function = item["function"]
             self.assertTrue(function["description"])
             self.assertEqual(["a", "b"], function["parameters"]["required"])
+
+    def test_subtract_tool_and_offline_parser(self):
+        self.assertEqual("5.0", self.agent.call_tool("subtract_numbers", {"a": 8, "b": 3}))
+        result = self.agent.run_offline("8 减 3")
+        self.assertEqual("5.0", result.answer)
+        self.assertEqual(["subtract_numbers"], result.tool_names)
+
+    def test_offline_result_contains_safe_structured_events(self):
+        result = self.agent.run_offline("先计算 8 加 4，再把结果乘以 3")
+        self.assertEqual(2, len(result.events))
+
+        first_event = result.events[0]
+        self.assertEqual(
+            {"step", "tool", "arguments", "observation", "duration_ms"},
+            set(first_event),
+        )
+        self.assertEqual(1, first_event["step"])
+        self.assertEqual("add_numbers", first_event["tool"])
+        self.assertEqual("12.0", first_event["observation"])
+        self.assertGreaterEqual(first_event["duration_ms"], 0)
+        self.assertNotIn("api_key", str(result.events).lower())
+        self.assertNotIn("authorization", str(result.events).lower())
+
+        error_result = self.agent.run_offline("10 除以 0")
+        self.assertEqual(1, len(error_result.events))
+        self.assertIn("除数不能为 0", error_result.events[0]["observation"])
 
     def test_call_tool_validates_known_tools(self):
         self.assertEqual("5.0", self.agent.call_tool("add_numbers", {"a": 2, "b": 3}))

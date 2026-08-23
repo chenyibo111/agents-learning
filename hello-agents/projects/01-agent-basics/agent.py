@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import re
+import time
 from typing import Any
 
 
@@ -19,12 +20,16 @@ class AgentResult:
     steps: int
     tool_names: list[str] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
 
 
 def add_numbers(a: float, b: float) -> float:
     """返回两个数字的和。"""
     return a + b
 
+def subtract_numbers(a: float, b: float) -> float:
+    """返回两个数字的差。"""
+    return a - b
 
 def multiply_numbers(a: float, b: float) -> float:
     """返回两个数字的乘积。"""
@@ -50,12 +55,14 @@ NUMBER_PARAMETERS = {
 
 TOOLS = [
     {"type": "function", "function": {"name": "add_numbers", "description": "计算两个数字的和。", "parameters": NUMBER_PARAMETERS}},
+    {"type": "function", "function": {"name": "subtract_numbers", "description": "计算两个数字的差。", "parameters": NUMBER_PARAMETERS}},
     {"type": "function", "function": {"name": "multiply_numbers", "description": "计算两个数字的乘积。", "parameters": NUMBER_PARAMETERS}},
     {"type": "function", "function": {"name": "divide_numbers", "description": "用第一个数字除以第二个数字；除数不能为 0。", "parameters": NUMBER_PARAMETERS}},
 ]
 
 _TOOL_FUNCTIONS = {
     "add_numbers": add_numbers,
+    "subtract_numbers": subtract_numbers,
     "multiply_numbers": multiply_numbers,
     "divide_numbers": divide_numbers,
 }
@@ -90,14 +97,26 @@ def run_actions(actions: list[tuple[str, dict[str, Any]]], *, max_steps: int = 5
     if len(actions) > max_steps:
         raise MaxStepsExceeded(f"动作数 {len(actions)} 超过最大步数 {max_steps}")
     messages: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     tool_names: list[str] = []
     answer = ""
-    for name, arguments in actions:
+    for step, (name, arguments) in enumerate(actions, start=1):
+        started_at = time.perf_counter()
         observation = execute_tool_safely(name, arguments)
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
         tool_names.append(name)
         messages.append({"role": "tool", "name": name, "arguments": arguments, "content": observation})
+        events.append(
+            {
+                "step": step,
+                "tool": name,
+                "arguments": dict(arguments),
+                "observation": observation,
+                "duration_ms": duration_ms,
+            }
+        )
         answer = observation
-    return AgentResult(answer=answer, steps=len(actions), tool_names=tool_names, messages=messages)
+    return AgentResult(answer=answer, steps=len(actions), tool_names=tool_names, messages=messages, events=events)
 
 
 def _number(value: str) -> float:
@@ -110,6 +129,7 @@ def parse_offline_actions(task: str) -> list[tuple[str, dict[str, Any]]]:
     multiplication = re.search(r"(\d+(?:\.\d+)?)\s*(?:乘以|乘)\s*(\d+(?:\.\d+)?)", task)
     result_multiplication = re.search(r"结果\s*(?:乘以|乘)\s*(\d+(?:\.\d+)?)", task)
     division = re.search(r"(\d+(?:\.\d+)?)\s*(?:除以|除)\s*(\d+(?:\.\d+)?)", task)
+    subtraction = re.search(r"(\d+(?:\.\d+)?)\s*(?:减去|减)\s*(\d+(?:\.\d+)?)", task)
     if addition and (multiplication or result_multiplication):
         first = (_number(addition.group(1)), _number(addition.group(2)))
         second = (_number(multiplication.group(2)),) if multiplication else (_number(result_multiplication.group(1)),)
@@ -121,7 +141,9 @@ def parse_offline_actions(task: str) -> list[tuple[str, dict[str, Any]]]:
         return [("multiply_numbers", {"a": _number(multiplication.group(1)), "b": _number(multiplication.group(2))})]
     if division:
         return [("divide_numbers", {"a": _number(division.group(1)), "b": _number(division.group(2))})]
-    raise ValueError("离线 Demo 只支持加法、乘法、除法示例")
+    if subtraction:
+        return [("subtract_numbers", {"a": _number(subtraction.group(1)), "b": _number(subtraction.group(2))})]
+    raise ValueError("离线 Demo 只支持加法、减法、乘法、除法示例")
 
 
 def run_offline(task: str, *, max_steps: int = 5) -> AgentResult:
