@@ -1,0 +1,3 @@
+# Tested official AutoGen stack for lesson 06.
+autogen-agentchat==0.7.5
+autogen-ext[openai]==0.7.5

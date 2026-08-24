@@ -1,0 +1,3 @@
+# Tested official AgentScope stack for lesson 06.
+agentscope==1.0.21
+mcp==1.29.0

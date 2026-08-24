@@ -1,0 +1,8 @@
+# Framework dependency index.
+#
+# Do not install every framework into the same virtual environment: the
+# tested AutoGen and AgentScope versions have incompatible protobuf ranges.
+# Choose one selector:
+#   pip install -r requirements-autogen.txt
+#   pip install -r requirements-agentscope.txt
+#   pip install -r requirements-langgraph.txt
