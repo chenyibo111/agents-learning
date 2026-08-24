@@ -12,7 +12,7 @@
 - 最小实践层：用固定条目和 token 成本模拟优先级选择与预算截断。
 - 工程实现层：接入真实 token 计数，建立消息分层、摘要存储、敏感字段过滤、注入检测、预算/成本监控和长会话回归测试。
 
-当前 Demo 只演示选择算法；工程层必须证明压缩不会丢失任务约束、来源和未完成事项。
+工程实现已补齐上下文编译、Token 计数、摘要存储、脱敏、注入检测和成本预算；它仍然是教学级实现，必须通过回归测试证明压缩不会丢失任务约束、来源和未完成事项。
 
 ## 上下文不是聊天记录
 
@@ -32,4 +32,13 @@ flowchart TD
 
 ## 实践与验收
 
-Demo 用优先级队列生成固定预算上下文。实验：改变预算观察信息淘汰；保留最近消息但压缩旧消息；加入来源和敏感字段过滤。验收：能说明一个字段为何被选中、被截断或被脱敏，并能计算一次运行的 token 预算。
+Demo 用优先级队列生成固定预算上下文。工程实现位于 `projects/09-context-engineering/context_engine/`，包括：
+
+- `ContextBuilder`：必选安全约束/当前任务优先，按优先级、相关性、新鲜度选择可选项；
+- `TokenCounter`：优先使用 `tiktoken`，编码表不可用时显式降级；
+- `SensitiveDataFilter`：脱敏 API Key、Authorization、Cookie、密码和 Token；
+- `PromptInjectionDetector`：将外部指令标记为不可信数据；
+- `SQLiteSummaryStore`：保存摘要及来源 ID；
+- `CostMonitor`：计算输入/输出成本，调用前执行预算门禁。
+
+实验：改变 `--budget` 观察信息淘汰；比较必选约束和旧历史的优先级；查看 `redacted_fields` 与 `injection_warnings`；用 `--cost-budget-usd` 触发成本门禁。验收：能说明一个字段为何被选中、被截断或被脱敏，并能计算一次运行的 Token 和成本预算。
