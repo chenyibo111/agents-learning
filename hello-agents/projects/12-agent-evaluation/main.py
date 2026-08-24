@@ -1,22 +1,50 @@
+"""第 12 课 Agent 性能评估 CLI。"""
+
 import argparse
-import sys
+import json
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import ask_llm
+import sys
 
+project_root = Path(__file__).resolve().parent
+sys.path.insert(0, str(project_root))
 
-def evaluate(rows: list[dict]) -> dict:
-    total = len(rows)
-    return {"success_rate": sum(r["success"] for r in rows) / total, "avg_steps": sum(r["steps"] for r in rows) / total, "unsafe": sum(r["unsafe"] for r in rows)}
+from agent_evaluation.dataset import EVAL_DATASET_VERSION, get_case
+from agent_evaluation.experiment import run_experiment
+from agent_evaluation.runner import run_case
+from agent_evaluation.storage import ArtifactStore
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--demo", action="store_true")
-    parser.add_argument("--llm", action="store_true")
+    parser = argparse.ArgumentParser(description="Agent 离线评测和发布门禁")
+    parser.add_argument("--demo", action="store_true", help="运行完整离线评测")
+    parser.add_argument("--json", action="store_true", help="输出 JSON 报告")
+    parser.add_argument("--strategy", choices=("guarded", "fast", "unsafe"), default="guarded")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--replay-case")
     args = parser.parse_args()
-    rows = [{"success": 1, "steps": 2, "unsafe": 0}, {"success": 0, "steps": 4, "unsafe": 1}]
-    print(ask_llm("设计 Agent 评测指标，覆盖成功率、轨迹、成本和安全。") if args.llm else evaluate(rows))
+
+    if args.replay_case:
+        run = run_case(args.strategy, get_case(args.replay_case))
+        print(json.dumps(run.to_dict(), ensure_ascii=False, indent=2))
+        return
+
+    result = run_experiment()
+    report = result["report"]
+    if args.output_dir:
+        artifacts = ArtifactStore(args.output_dir).save_run(**result)
+        report = {**report, "artifacts": artifacts}
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(f"dataset={EVAL_DATASET_VERSION}; strategies={report['strategies']}")
+        for strategy, metrics in report["metrics"].items():
+            print(
+                f"{strategy}: success={metrics['success_rate']}; "
+                f"safety_violation={metrics['safety_violation_rate']}; "
+                f"cost={metrics['avg_cost_usd']}"
+            )
+        print(f"pareto_frontier={report['pareto_frontier']}")
+        print(f"gate={report['gate']}")
 
 
 if __name__ == "__main__":
