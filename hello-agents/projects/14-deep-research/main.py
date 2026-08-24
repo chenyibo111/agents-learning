@@ -1,22 +1,38 @@
 import argparse
-import sys
+import json
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import sys
+
+project_root = Path(__file__).resolve().parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root.parents[0]))
 from common import ask_llm
-
-
-def research_demo() -> dict:
-    sources = [{"id": "S1", "title": "本地文档", "evidence": "Agent 需要工具和状态。"}, {"id": "S2", "title": "评测记录", "evidence": "离线数据可用于回归。"}]
-    claims = [{"text": "Agent 由模型、工具和状态组成", "source_ids": ["S1"]}, {"text": "离线评测适合回归", "source_ids": ["S2"]}]
-    return {"sources": sources, "claims": claims, "rounds": 2}
+from deep_research.experiment import run_demo
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--llm", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--conflict", action="store_true")
+    parser.add_argument("--retrieval-failure", action="store_true")
+    parser.add_argument("--interrupt-after-round", type=int)
+    parser.add_argument("--resume")
+    parser.add_argument("--output-dir")
     args = parser.parse_args()
-    print(ask_llm("设计一个带来源、证据核对和预算的 DeepResearch 流程。") if args.llm else research_demo())
+    if args.llm:
+        output = ask_llm("设计一个带来源、证据核对和预算的 DeepResearch 流程。")
+    else:
+        result = run_demo(
+            conflict=args.conflict,
+            retrieval_failure=args.retrieval_failure,
+            interrupt_after_round=args.interrupt_after_round,
+            resume_path=args.resume,
+            output_dir=args.output_dir,
+        )
+        output = json.dumps(result, ensure_ascii=False, indent=2) if args.json else result["markdown"]
+    print(output)
 
 
 if __name__ == "__main__":
