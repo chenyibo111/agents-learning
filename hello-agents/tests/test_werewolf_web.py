@@ -1,6 +1,11 @@
+import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
+import threading
 import unittest
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 PROJECT = Path(__file__).resolve().parents[1] / "projects" / "16-graduation-project"
@@ -9,7 +14,7 @@ sys.path.insert(0, str(PROJECT))
 from werewolf_arena.engine import GameEngine
 from werewolf_arena.rules import initial_game
 from werewolf_arena.schemas import Phase
-from werewolf_arena.web import RoomConflictError, RoomStore
+from werewolf_arena.web import RoomConflictError, RoomStore, build_server
 
 if str(PROJECT) in sys.path:
     sys.path.remove(str(PROJECT))
@@ -17,6 +22,37 @@ if str(PROJECT) in sys.path:
 
 class WerewolfWebTests(unittest.TestCase):
     """覆盖 Web 垂直切片依赖的引擎和本地服务契约。"""
+
+    def setUp(self):
+        self.http_store = RoomStore(step_interval=60.0)
+        self.http_server = build_server("127.0.0.1", 0, store=self.http_store)
+        self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+        self.http_thread.start()
+        self.base_url = f"http://127.0.0.1:{self.http_server.server_port}"
+        self.addCleanup(self._close_http)
+
+    def _close_http(self):
+        self.http_server.shutdown()
+        self.http_server.server_close()
+        self.http_store.close()
+        self.http_thread.join(timeout=1.0)
+
+    def request_json(self, method, path, payload=None, expect_error=False):
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = Request(
+            self.base_url + path,
+            data=body,
+            method=method,
+            headers={"Content-Type": "application/json"} if body is not None else {},
+        )
+        try:
+            with urlopen(request, timeout=2.0) as response:
+                result = SimpleNamespace(status=response.status, payload=json.loads(response.read().decode("utf-8")))
+        except HTTPError as error:
+            result = SimpleNamespace(status=error.code, payload=json.loads(error.read().decode("utf-8")))
+        if not expect_error:
+            self.assertLess(result.status, 400)
+        return result
 
     def test_step_advances_one_phase_without_running_to_completion(self):
         state = initial_game(seed=7)
@@ -58,3 +94,35 @@ class WerewolfWebTests(unittest.TestCase):
         self.assertTrue(room.wait_until_done(timeout=2.0))
         self.assertIn(room.snapshot(after=0)["state"]["status"], {"COMPLETED", "DRAW"})
         store.close()
+
+    def test_http_create_start_and_incremental_audit(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        self.assertEqual(created.status, 201)
+        game_id = created.payload["game_id"]
+
+        room = self.http_store.get(game_id)
+        room.step_once()
+        started = self.request_json("POST", f"/api/rooms/{game_id}/start", {})
+        self.assertEqual(started.status, 200)
+
+        audit = self.request_json("GET", f"/api/rooms/{game_id}/audit?after=0")
+        self.assertEqual(audit.payload["state"]["phase"], "night_wolf_confirm")
+        self.assertEqual(audit.payload["cursor"], len(audit.payload["state"]["events"]))
+        self.assertGreaterEqual(len(audit.payload["events"]), 1)
+
+    def test_public_endpoint_omits_private_identity_and_events(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        game_id = created.payload["game_id"]
+        room = self.http_store.get(game_id)
+        room.step_once()
+
+        public = self.request_json("GET", f"/api/rooms/{game_id}/public?after=0")
+        body = json.dumps(public.payload, ensure_ascii=False)
+        self.assertNotIn('"role"', body)
+        self.assertNotIn('"pending_actions"', body)
+        self.assertNotIn('"public": false', body)
+
+    def test_http_errors_are_stable_json(self):
+        response = self.request_json("GET", "/api/rooms/missing/audit", expect_error=True)
+        self.assertEqual(response.status, 404)
+        self.assertEqual(response.payload["error"], "room_not_found")

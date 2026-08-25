@@ -84,10 +84,11 @@ class Room:
     def _run(self) -> None:
         try:
             while not self._stop_event.is_set():
+                if self._stop_event.wait(self.step_interval):
+                    return
                 self.step_once()
                 if not self.running and self.state.status != "RUNNING":
                     return
-                self._stop_event.wait(self.step_interval)
         except Exception as exc:  # pragma: no cover - exercised through the observable worker error state
             with self._lock:
                 self.worker_error = f"{type(exc).__name__}: {str(exc)[:200]}"
