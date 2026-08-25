@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import subprocess
+import time
 from types import SimpleNamespace
 from pathlib import Path
 import threading
@@ -15,13 +16,24 @@ WEB_HTML = PROJECT / "werewolf_arena" / "web.html"
 sys.path.insert(0, str(PROJECT))
 
 from werewolf_arena.engine import GameEngine
-from werewolf_arena.policies import ScriptedModelAdapter
+from werewolf_arena.policies import ModelResponse, ScriptedModelAdapter
 from werewolf_arena.rules import initial_game
 from werewolf_arena.schemas import Phase
 from werewolf_arena.web import RoomConflictError, RoomStore, build_server
 
 if str(PROJECT) in sys.path:
     sys.path.remove(str(PROJECT))
+
+
+class BlockingAdapter:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def complete(self, system_prompt, user_prompt):
+        self.started.set()
+        self.release.wait(timeout=2.0)
+        return ModelResponse('{"action_type": "noop"}')
 
 
 class WerewolfWebTests(unittest.TestCase):
@@ -113,6 +125,24 @@ class WerewolfWebTests(unittest.TestCase):
         self.assertEqual(len(snapshot["llm_requests"]), 2)
         self.assertNotIn("Prompt", json.dumps(snapshot["llm_requests"]))
         self.assertNotIn('{"action_type": "noop"}', json.dumps(snapshot["llm_requests"]))
+        store.close()
+
+    def test_audit_snapshot_is_available_while_llm_call_is_blocked(self):
+        adapter = BlockingAdapter()
+        store = RoomStore(policy_mode="llm", model_adapter=adapter, step_interval=0.0)
+        room = store.create(seed=7)
+        worker = threading.Thread(target=room.step_once)
+        worker.start()
+        self.assertTrue(adapter.started.wait(timeout=1.0))
+
+        started_at = time.monotonic()
+        snapshot = room.snapshot(after=0, request_after=0)
+        elapsed = time.monotonic() - started_at
+
+        self.assertLess(elapsed, 0.2)
+        self.assertEqual(snapshot["state"]["phase"], "night_wolf")
+        adapter.release.set()
+        worker.join(timeout=1.0)
         store.close()
 
     def test_http_create_start_and_incremental_audit(self):

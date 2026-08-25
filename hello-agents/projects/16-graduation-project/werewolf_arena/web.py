@@ -96,7 +96,8 @@ class Room:
         self.policy_mode = policy_mode
         self.model_name = model_name
         self.request_collector = request_collector or RequestTraceCollector()
-        self._lock = threading.RLock()
+        self._state_lock = threading.RLock()
+        self._step_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._done_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -108,26 +109,31 @@ class Room:
 
     @property
     def running(self) -> bool:
-        with self._lock:
+        with self._state_lock:
             return bool(self._thread and self._thread.is_alive() and self.state.status == "RUNNING")
 
     def step_once(self) -> GameState:
         """推进一个阶段；该方法是 worker 和测试共用的单步边界。"""
-        with self._lock:
-            if self.state.status != "RUNNING":
+        with self._step_lock:
+            with self._state_lock:
+                current_state = self.state
+            if current_state.status != "RUNNING":
                 self._done_event.set()
-                return self.state
-            if self.state.round_number > self.max_rounds:
-                self.state = finish_draw(self.state)
+                return current_state
+            if current_state.round_number > self.max_rounds:
+                next_state = finish_draw(current_state)
             else:
-                self.state = self.engine.step(self.state)
-            if self.state.status != "RUNNING":
+                # 模型请求在状态锁之外执行，审计 API 可以读取最近一次已提交快照。
+                next_state = self.engine.step(current_state)
+            with self._state_lock:
+                self.state = next_state
+            if next_state.status != "RUNNING":
                 self._done_event.set()
-            return self.state
+            return next_state
 
     def start(self) -> None:
         """幂等启动 daemon worker。"""
-        with self._lock:
+        with self._state_lock:
             if self.state.status != "RUNNING":
                 self._done_event.set()
                 return
@@ -146,13 +152,13 @@ class Room:
                 if not self.running and self.state.status != "RUNNING":
                     return
         except Exception as exc:  # pragma: no cover - exercised through the observable worker error state
-            with self._lock:
+            with self._state_lock:
                 self.worker_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                 self.state = replace(self.state, status="ERROR")
                 self._done_event.set()
 
     def stop(self) -> None:
-        with self._lock:
+        with self._state_lock:
             self._stop_event.set()
             thread = self._thread
         if thread and thread is not threading.current_thread():
@@ -160,7 +166,9 @@ class Room:
 
     def wait_until_done(self, timeout: float = 2.0) -> bool:
         """等待终态或 worker 错误，返回是否已停止。"""
-        if self.state.status != "RUNNING":
+        with self._state_lock:
+            status = self.state.status
+        if status != "RUNNING":
             return True
         return self._done_event.wait(timeout=max(0.0, timeout))
 
@@ -168,22 +176,25 @@ class Room:
         """返回完整审计状态和指定游标之后的事件。"""
         if after < 0:
             raise InvalidCursorError("after must be a non-negative integer")
-        with self._lock:
-            events = self.state.events[after:]
-            request_records, request_cursor = self.request_collector.snapshot(request_after)
-            return {
-                "game_id": self.state.game_id,
-                "policy_mode": self.policy_mode,
-                "model": self.model_name or None,
-                "state": self.state.to_dict(),
-                "events": [event.to_dict() for event in events],
-                "cursor": len(self.state.events),
-                "llm_requests": request_records,
-                "request_cursor": request_cursor,
-                "running": self.running,
-                "worker_error": self.worker_error,
-                "artifacts": {},
-            }
+        with self._state_lock:
+            current_state = self.state
+            running = bool(self._thread and self._thread.is_alive() and current_state.status == "RUNNING")
+            worker_error = self.worker_error
+        events = current_state.events[after:]
+        request_records, request_cursor = self.request_collector.snapshot(request_after)
+        return {
+            "game_id": current_state.game_id,
+            "policy_mode": self.policy_mode,
+            "model": self.model_name or None,
+            "state": current_state.to_dict(),
+            "events": [event.to_dict() for event in events],
+            "cursor": len(current_state.events),
+            "llm_requests": request_records,
+            "request_cursor": request_cursor,
+            "running": running,
+            "worker_error": worker_error,
+            "artifacts": {},
+        }
 
 
 class RoomStore:
@@ -258,7 +269,7 @@ def _cursor(query: dict[str, list[str]]) -> int:
 
 
 def _summary(room: Room) -> dict[str, Any]:
-    with room._lock:
+    with room._state_lock:
         state = room.state
         return {
             "game_id": state.game_id,
@@ -275,7 +286,7 @@ def public_snapshot(room: Room, after: int = 0) -> dict[str, Any]:
     """构造不含身份、待行动和私有事件的公开视图。"""
     if after < 0:
         raise InvalidCursorError("after must be a non-negative integer")
-    with room._lock:
+    with room._state_lock:
         state = room.state
         public_events = [event for event in state.events[after:] if event.public]
         return {
