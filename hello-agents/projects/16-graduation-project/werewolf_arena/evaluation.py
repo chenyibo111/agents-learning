@@ -7,7 +7,7 @@ from typing import Any
 from .schemas import GameState
 
 
-def evaluate_game(state: GameState) -> dict[str, Any]:
+def evaluate_game(state: GameState, *, offline: bool = True) -> dict[str, Any]:
     """把最终状态与事件轨迹汇总为胜负、规则、隐私和成本报告。"""
     counts = Counter(event.event_type for event in state.events)
     # 这些字段只应存在于私有状态或私有事件；出现在 public Event 中即视为泄露。
@@ -31,5 +31,5 @@ def evaluate_game(state: GameState) -> dict[str, Any]:
         "metrics": dict(state.metrics),
         "rule_compliance": {"passed": counts["action_rejected"] == 0},
         "privacy_audit": {"passed": not leaks, "leaks": sorted(set(leaks))},
-        "offline": True,
+        "offline": offline,
     }

@@ -34,7 +34,22 @@ def initial_game(seed: int = 7) -> GameState:
         round_number=1,
         phase=Phase.NIGHT_WOLF,
         players=tuple(players),
-        metrics={"model_calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "latency_ms": 0},
+        metrics={
+            "model_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "latency_ms": 0,
+            "model_failures": 0,
+            "request_count": 0,
+            "fallback_count": 0,
+            "noop_count": 0,
+            "abstain_count": 0,
+            "effective_action_count": 0,
+            "invalid_model_output_count": 0,
+            "schema_failure_count": 0,
+            "invalid_json_count": 0,
+        },
     )
 
 
@@ -78,6 +93,24 @@ def _metrics(state: GameState, action: Action) -> GameState:
     metrics["output_tokens"] = int(metrics.get("output_tokens", 0)) + action.output_tokens
     metrics["cost_usd"] = round(float(metrics.get("cost_usd", 0.0)) + action.cost_usd, 8)
     metrics["latency_ms"] = int(metrics.get("latency_ms", 0)) + action.latency_ms
+    if action.model_calls > 0:
+        metrics["request_count"] = int(metrics.get("request_count", 0)) + 1
+        if action.action_type == "noop":
+            metrics["noop_count"] = int(metrics.get("noop_count", 0)) + 1
+        elif action.action_type == "abstain":
+            metrics["abstain_count"] = int(metrics.get("abstain_count", 0)) + 1
+        else:
+            metrics["effective_action_count"] = int(metrics.get("effective_action_count", 0)) + 1
+        if action.fallback_reason:
+            metrics["fallback_count"] = int(metrics.get("fallback_count", 0)) + 1
+        if action.fallback_reason in {"invalid_json", "schema_validation"}:
+            metrics["invalid_model_output_count"] = int(metrics.get("invalid_model_output_count", 0)) + 1
+        if action.fallback_reason == "schema_validation":
+            metrics["schema_failure_count"] = int(metrics.get("schema_failure_count", 0)) + 1
+        if action.fallback_reason == "invalid_json":
+            metrics["invalid_json_count"] = int(metrics.get("invalid_json_count", 0)) + 1
+    if action.decision_label.startswith("llm_"):
+        metrics["model_failures"] = int(metrics.get("model_failures", 0)) + 1
     return replace(state, metrics=metrics)
 
 
@@ -89,7 +122,12 @@ def _reject(state: GameState, action: Action, rule: str) -> GameState:
         _event(
             state,
             "action_rejected",
-            {"actor_id": action.actor_id, "action_type": action.action_type, "reason": rule},
+            {
+                "actor_id": action.actor_id,
+                "action_type": action.action_type,
+                "decision_label": action.decision_label,
+                "reason": rule,
+            },
             public=False,
             recipients=(action.actor_id,),
             rule=rule,
@@ -128,6 +166,9 @@ def _validate_action(state: GameState, action: Action) -> str | None:
         return "dead_player_cannot_act"
     if _action_for(state, actor.player_id) is not None:
         return "duplicate_action"
+    # noop 是 Policy/模型失败后的安全无动作，所有阶段都允许提交并由结算器自然跳过。
+    if action.action_type == "noop":
+        return None
     if state.phase == Phase.NIGHT_WOLF:
         # 夜间第一阶段仅狼人可攻击，且狼人不能攻击狼人阵营。
         if actor.role != Role.WOLF:
@@ -254,7 +295,7 @@ def _resolve_seer_phase(state: GameState) -> GameState:
     """结算预言家查验，并把狼人/好人结论仅单播给预言家。"""
     seer = next((player for player in state.players if player.alive and player.role == Role.SEER), None)
     action = _action_for(state, seer.player_id) if seer else None
-    if action is None or seer is None:
+    if action is None or seer is None or action.action_type != "inspect":
         # 预言家死亡或未行动时，安静跳过，不为其他玩家制造额外信息。
         return replace(state, pending_actions=(), phase=Phase.NIGHT_WITCH)
     target = _player(state, action.target_id)

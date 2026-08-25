@@ -9,7 +9,7 @@ from werewolf_arena.engine import GameEngine
 from werewolf_arena.evaluation import evaluate_game
 from werewolf_arena.policies import LLMPolicy, OpenAICompatibleModelAdapter
 from werewolf_arena.schemas import Phase
-from werewolf_arena.storage import ArtifactStore
+from werewolf_arena.storage import ArtifactStore, RequestTraceStore
 
 
 # 项目根目录同时是默认对局记录的落盘位置，而不是调用命令时的当前工作目录。
@@ -24,12 +24,16 @@ def main() -> None:
     parser.add_argument("--llm", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--max-rounds", type=int, default=3)
+    parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--policy", choices=("rule", "llm"), default="rule")
+    parser.add_argument("--progress", action="store_true", help="将 LLM 请求进度写到 stderr")
     parser.add_argument("--interrupt-after-phase", choices=[phase.value for phase in Phase if phase != Phase.FINISHED])
     args = parser.parse_args()
+    output_dir = args.output_dir or (
+        args.resume.parent if args.resume else ArtifactStore.default_run_directory(PROJECT_ROOT, args.seed)
+    )
     if args.llm:
         # 这是课程概念问答模式，不会把六名玩家切换到真实对局模型。
         print(ask_llm("给六 Agent 狼人杀毕业项目列出模型 Policy、规则引擎、评测与安全的检查清单。"))
@@ -38,14 +42,25 @@ def main() -> None:
     policies = None
     if args.policy == "llm":
         # 六个 Policy 拥有各自的 Observation/PROMPT，上层适配器统一负责网络调用。
-        model = OpenAICompatibleModelAdapter.from_environment()
-        policies = {player_id: LLMPolicy(player_id, model) for player_id in ("alice", "bob", "carol", "david", "eve", "frank")}
+        on_event = None
+        if args.progress:
+            def on_event(event: dict) -> None:
+                details = " ".join(
+                    f"{key}={event[key]}"
+                    for key in ("attempt", "reason", "latency_ms")
+                    if key in event
+                )
+                print(f"[llm] {event.get('event', 'event')} {details}".rstrip(), file=sys.stderr, flush=True)
+
+        model = OpenAICompatibleModelAdapter.from_environment(on_event=on_event)
+        request_trace = RequestTraceStore(output_dir / "llm_requests.jsonl")
+        policies = {
+            player_id: LLMPolicy(player_id, model, on_request=request_trace.append)
+            for player_id in ("alice", "bob", "carol", "david", "eve", "frank")
+        }
 
     # 新游戏默认写入项目内唯一 runs/<timestamp>-seed-<seed>-<id>/；
     # 恢复游戏则默认继续使用原 checkpoint 所在目录，避免产生分叉记录。
-    output_dir = args.output_dir or (
-        args.resume.parent if args.resume else ArtifactStore.default_run_directory(PROJECT_ROOT, args.seed)
-    )
     if args.resume:
         # 恢复路径会保留已有 checkpoint；最终 ArtifactStore 仍会刷新报告和 JSONL。
         state = GameEngine.resume(args.resume, max_rounds=args.max_rounds, policies=policies)
@@ -56,7 +71,7 @@ def main() -> None:
             checkpoint_path=output_dir / "checkpoint.json",
         )
     # 一局结束后统一评测，再将状态、逐事件轨迹和摘要落盘。
-    report = evaluate_game(state)
+    report = evaluate_game(state, offline=args.policy != "llm")
     artifacts = ArtifactStore(output_dir).write(state, report)
     payload = {"state": state.to_dict(), "report": report, "artifacts": artifacts}
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=args.json))

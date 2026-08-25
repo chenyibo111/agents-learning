@@ -125,6 +125,17 @@ def load_langgraph_adapter():
     return module
 
 
+def load_lesson_main():
+    """按绝对路径加载第 6 课 CLI，避免其他课程的 main.py 污染 sys.modules。"""
+    spec = importlib.util.spec_from_file_location("agent_framework_lesson_main", MAIN)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载第 6 课 main.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def has_module(name):
     try:
         return importlib.util.find_spec(name) is not None
@@ -827,7 +838,7 @@ class LessonSixCliTests(unittest.TestCase):
         self.assertIn('"status": "completed"', completed.stdout)
 
     def test_cli_real_adapter_reports_missing_configuration_without_secret(self):
-        import main as lesson_main
+        lesson_main = load_lesson_main()
 
         error_output = io.StringIO()
         with (

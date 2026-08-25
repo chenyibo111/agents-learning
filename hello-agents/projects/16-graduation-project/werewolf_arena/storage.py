@@ -43,6 +43,21 @@ class CheckpointStore:
         return GameState.from_dict(json.loads(self.path.read_text(encoding="utf-8")))
 
 
+class RequestTraceStore:
+    """以 JSONL 增量保存脱敏的单次 LLM 请求摘要。"""
+
+    def __init__(self, path: Path):
+        """绑定请求追踪路径；只接收调用方已经构造好的安全基础类型。"""
+        self.path = Path(path)
+
+    def append(self, record: dict[str, Any]) -> None:
+        """追加一条记录并刷新到磁盘，不保存 Prompt、原始响应或密钥。"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+
+
 class ArtifactStore:
     """管理一局游戏对外保留的 checkpoint、事件轨迹和评测报告。"""
 
@@ -72,4 +87,8 @@ class ArtifactStore:
         _atomic_write(events, "".join(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n" for event in state.events))
         report_path = self.root / "report.json"
         _atomic_write(report_path, json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        return {"checkpoint": str(checkpoint), "events": str(events), "report": str(report_path)}
+        artifacts = {"checkpoint": str(checkpoint), "events": str(events), "report": str(report_path)}
+        request_trace = self.root / "llm_requests.jsonl"
+        if request_trace.exists():
+            artifacts["llm_requests"] = str(request_trace)
+        return artifacts

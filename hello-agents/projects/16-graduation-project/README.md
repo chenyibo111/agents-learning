@@ -22,7 +22,8 @@
 
 - `checkpoint.json`：完整、版本化的引擎状态；
 - `events.jsonl`：按事件存放的审计轨迹；
-- `report.json`：胜负、规则合规、隐私和模型成本报告。
+- `report.json`：胜负、规则合规、隐私、模型成本和决策观测指标报告；
+- `llm_requests.jsonl`：仅在 LLM 模式生成的脱敏请求级追踪，不包含完整 Prompt、原始响应或 API Key。
 
 未传 `--output-dir` 时，以上工件会自动生成在项目目录的 `runs/<时间戳>-seed-<seed>-<随机标识>/` 下；`runs/` 已被 Git 忽略，避免对局记录混入源码提交。
 
@@ -55,23 +56,35 @@
 $env:WEREWOLF_LLM_ENDPOINT = "https://your-provider.example/v1/chat/completions"
 $env:WEREWOLF_LLM_API_KEY = "your-secret"
 $env:WEREWOLF_LLM_MODEL = "your-model"
+$env:WEREWOLF_LLM_TIMEOUT_SECONDS = "30"
+$env:WEREWOLF_LLM_MAX_RETRIES = "1"
+$env:WEREWOLF_LLM_RETRY_BACKOFF_SECONDS = "0.5"
+$env:WEREWOLF_LLM_MAX_OUTPUT_TOKENS = "2048"
+$env:WEREWOLF_LLM_THINKING = "disabled" # auto / enabled / disabled
+$env:WEREWOLF_LLM_INPUT_PRICE_PER_MILLION = "0"
+$env:WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION = "0"
 .\.venv\Scripts\python.exe hello-agents\projects\16-graduation-project\main.py --demo --policy llm --max-rounds 3 --json
 ```
 
-六名玩家会使用独立的 Policy 上下文，但共享同一个可配置模型适配器。模型必须返回 JSON：`action_type`、`target_id`、`speech`、`decision_label`。解析失败或非法行为会被规则引擎记录并拒绝；密钥不会写进 checkpoint、事件或报告。
+六名玩家会使用独立的 Policy 上下文，但共享同一个可配置模型适配器。模型必须返回 JSON：`action_type`、`target_id`、`speech`、`decision_label`。Prompt 会按阶段声明允许的行动，Policy 会将常见别名（如 `kill`、`speech`）归一化，并在规则层之前执行核心字段、长度、阶段和投票目标 Schema 校验；`decision_label` 只是可选辅助元数据，缺失、`null` 或非字符串会归一化为空字符串。投票必须指向存活且不是自己的玩家；弃票或 `noop` 不得携带目标。格式或核心 Schema 失败时最多追加一次短修复请求，仍失败才使用安全 `noop`；其他合法但目标错误的行动仍由规则引擎拒绝；密钥不会写进 checkpoint、事件或报告。
+
+LLM 适配器默认关闭 thinking，并将结构化行动输出上限设为 2048；`WEREWOLF_LLM_THINKING=auto` 会省略供应商专属字段，`enabled` 可恢复思考模式。适配器对超时、网络错误、HTTP 408/425/429 和 5xx 做有限重试；401/其他 4xx 不重试。重试耗尽后返回安全的 `noop`，并在 `decision_label`、`model_failures` 和 stderr 进度日志中保留非敏感失败原因，整局不会因为单个模型请求超时而崩溃。`max_tokens` 限制模型输出上限，价格环境变量按百万 Token 计算 `cost_usd`。`--progress` 只输出请求阶段、尝试次数、错误码和耗时，不输出 Prompt、响应或 API Key。
+
+LLM 模式还会为每个 Agent 的每次逻辑请求追加一条脱敏记录，包含 `agent_id`、`phase`、`request_status`、`decision_status`、耗时、Token、解析后的行动类型、降级原因和 hash。完整请求/响应不会落盘。
 
 ## 已覆盖的验收场景
 
 - 固定 seed 的 2 狼人、1 预言家、1 女巫、2 村民分配；
 - 村民、狼人、预言家和女巫之间的私有信息隔离；
 - 狼人协同行动、女巫救人、非法行动和平票；
-- LLM 非 JSON 输出降级为 `noop`；
+- LLM 非 JSON、未知字段或非法阶段行动降级为可结算的 `noop`；
+- LLM 常见行动别名归一化、阶段协议和本地 Schema 校验；
 - 连续运行与 checkpoint 恢复结果一致；
 - 胜负、规则合规、隐私与成本指标输出。
 
 ## 限制与下一步
 
-当前版本是单进程、回合制核心，没有 Web UI；狼人没有独立私聊协商阶段，默认规则 Policy 仅用于稳定回归，并不代表高水平游戏策略。后续可增加狼人协商、死亡身份公开配置、角色扩展、并行模型调用、Prompt 版本实验、Elo/胜率评测和可视化回放。
+当前版本是单进程、回合制核心，没有 Web UI；狼人没有独立私聊协商阶段，默认规则 Policy 仅用于稳定回归，并不代表高水平游戏策略。不同玩家的白天观察依赖前序公开事件，因此当前阶段调度保持串行；后续可在保持同一阶段语义的前提下增加狼人协商、并行独立请求、Prompt 版本实验、Elo/胜率评测和可视化回放。
 
 测试：
 

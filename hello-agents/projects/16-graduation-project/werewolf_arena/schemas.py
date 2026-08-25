@@ -74,6 +74,7 @@ class Action:
     output_tokens: int = 0
     cost_usd: float = 0.0
     latency_ms: int = 0
+    fallback_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """序列化行动及关联的模型调用指标，供 checkpoint 和审计使用。"""
@@ -88,6 +89,7 @@ class Action:
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
             "latency_ms": self.latency_ms,
+            "fallback_reason": self.fallback_reason,
         }
 
     @classmethod

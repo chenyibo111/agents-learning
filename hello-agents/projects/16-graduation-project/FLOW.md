@@ -29,6 +29,7 @@ GameEngine.run()
   └─ Event + 新 GameState
           │
           ├─ CheckpointStore：每阶段保存 checkpoint.json
+          ├─ LLMPolicy + RequestTraceStore：LLM 模式增量写 llm_requests.jsonl
           └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl
 ```
 
@@ -66,9 +67,10 @@ projects/16-graduation-project/runs/
     checkpoint.json
     events.jsonl
     report.json
+    llm_requests.jsonl  # 仅 LLM 模式，脱敏请求级追踪
 ```
 
-4. `checkpoint.json` 会在每个阶段之后更新；最终 `ArtifactStore` 再写入三类工件。
+4. `checkpoint.json` 会在每个阶段之后更新；LLM 模式的请求摘要在决策完成后增量写入 `llm_requests.jsonl`；最终 `ArtifactStore` 再写入报告和事件工件。
 
 ### 恢复对局
 
@@ -152,6 +154,13 @@ LLMPolicy
 WEREWOLF_LLM_ENDPOINT
 WEREWOLF_LLM_API_KEY
 WEREWOLF_LLM_MODEL
+WEREWOLF_LLM_TIMEOUT_SECONDS
+WEREWOLF_LLM_MAX_RETRIES
+WEREWOLF_LLM_RETRY_BACKOFF_SECONDS
+WEREWOLF_LLM_THINKING
+WEREWOLF_LLM_MAX_OUTPUT_TOKENS
+WEREWOLF_LLM_INPUT_PRICE_PER_MILLION
+WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION
 ```
 
 默认 `--policy rule` 完全离线；只有显式传入 `--policy llm` 才可能产生网络调用和费用。
@@ -163,7 +172,8 @@ GameState + Events
   ├─ checkpoint.json：恢复整局
   ├─ events.jsonl：逐事件回放和调试
   └─ evaluate_game()
-        └─ report.json
+        ├─ report.json
+        └─ llm_requests.jsonl（LLM 模式）
              ├─ winner / rounds
              ├─ speech_count / vote_count
              ├─ rejected_action_count
