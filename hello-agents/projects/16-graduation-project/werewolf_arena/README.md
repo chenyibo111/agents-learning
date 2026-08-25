@@ -5,6 +5,15 @@
 - [ISSUES.md](ISSUES.md)：记录运行中发现的问题。问题无论是否已经解决都先登记，解决后更新状态。
 - [FIXES.md](FIXES.md)：记录已经完成并验证过的修复，通过 `I-xxx` 关联问题。
 
+当前领域模块还包括：
+
+- `narrative.py`：只把公开事件转换为观众可读文本；私有事件直接跳过。
+- `spectator.py`：生成自包含剧场型 `spectator.html`，展示公开时间线和存活状态，不嵌入完整 `GameState`。
+- `god_view.py`：在显式 `--god-view` 下生成完整身份、私有事件和规则诊断页面，仅供开发/裁判回放。
+- `engine.py` / `main.py`：通过 `on_public_event` 和 `--spectate` 输出实时公开叙事；`--json --spectate` 将叙事写入 stderr，保持 stdout 可解析。
+
+狼人夜间阶段为“私密协商 → 独立确认投票”。确认票对狼人队友也暂时隐藏，只有全员投向同一名合法目标才形成袭击。
+
 ## 追加约定
 
 1. 每次发现问题，在 `ISSUES.md` 末尾追加一个递增编号。

@@ -20,6 +20,7 @@ class Role(str, Enum):
 class Phase(str, Enum):
     """有限状态机的全部阶段，规则引擎只允许按既定顺序推进。"""
     NIGHT_WOLF = "night_wolf"
+    NIGHT_WOLF_CONFIRM = "night_wolf_confirm"
     NIGHT_SEER = "night_seer"
     NIGHT_WITCH = "night_witch"
     DAY_DISCUSSION = "day_discussion"

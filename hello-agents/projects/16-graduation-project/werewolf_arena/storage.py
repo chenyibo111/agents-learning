@@ -9,6 +9,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from .schemas import GameState
+from .spectator import render_spectator_html
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -77,8 +78,8 @@ class ArtifactStore:
         unique_id = run_id or uuid4().hex[:8]
         return Path(project_root) / "runs" / f"{timestamp}-seed-{seed}-{unique_id}"
 
-    def write(self, state: GameState, report: dict[str, Any]) -> dict[str, str]:
-        """输出一局游戏的三个工件，并返回绝对路径以供 CLI 报告。"""
+    def write(self, state: GameState, report: dict[str, Any], god_view: bool = False) -> dict[str, str]:
+        """输出公开工件；按显式开关选择是否额外输出上帝视角页面。"""
         self.root.mkdir(parents=True, exist_ok=True)
         # checkpoint 用于恢复；JSONL 用于按事件流式分析；report 是面向人的汇总。
         checkpoint = self.root / "checkpoint.json"
@@ -87,7 +88,20 @@ class ArtifactStore:
         _atomic_write(events, "".join(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n" for event in state.events))
         report_path = self.root / "report.json"
         _atomic_write(report_path, json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        artifacts = {"checkpoint": str(checkpoint), "events": str(events), "report": str(report_path)}
+        spectator = self.root / "spectator.html"
+        _atomic_write(spectator, render_spectator_html(state))
+        artifacts = {
+            "checkpoint": str(checkpoint),
+            "events": str(events),
+            "report": str(report_path),
+            "spectator": str(spectator),
+        }
+        if god_view:
+            from .god_view import render_god_view_html
+
+            god_view_path = self.root / "god_view.html"
+            _atomic_write(god_view_path, render_god_view_html(state))
+            artifacts["god_view"] = str(god_view_path)
         request_trace = self.root / "llm_requests.jsonl"
         if request_trace.exists():
             artifacts["llm_requests"] = str(request_trace)

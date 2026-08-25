@@ -28,9 +28,10 @@ GameEngine.run()
   │      v
   └─ Event + 新 GameState
           │
+          ├─ on_public_event：只将公开事件转换为终端观战叙事
           ├─ CheckpointStore：每阶段保存 checkpoint.json
           ├─ LLMPolicy + RequestTraceStore：LLM 模式增量写 llm_requests.jsonl
-          └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl
+          └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl、spectator.html；`--god-view` 时额外写 god_view.html
 ```
 
 最重要的边界是：`Policy` 只能读取 `PlayerObservation`，只有 `rules.py` 能改变 `GameState`。因此模型不能自报身份、伪造查验结果或直接宣布胜利。
@@ -86,9 +87,12 @@ projects/16-graduation-project/runs/
 
 ```text
 NIGHT_WOLF
-  ├─ 两只狼人分别提交 wolf_kill
+  ├─ 两只狼人分别提交私密 wolf_speak，所有狼人可见
+       ↓
+NIGHT_WOLF_CONFIRM
+  ├─ 两只狼人独立提交隐藏 wolf_vote
   ├─ 目标一致：记录私有 night_victim
-  └─ 目标不一致：记录私有 wolf_attack_failed
+  └─ 分票或弃票：记录私有 wolf_attack_failed，不形成袭击
        ↓
 NIGHT_SEER
   ├─ 预言家提交 inspect
@@ -96,15 +100,19 @@ NIGHT_SEER
        ↓
 NIGHT_WITCH
   ├─ 女巫看到 night_victim、解药和毒药余量
-  ├─ 提交 witch_save / witch_poison / noop
+  ├─ 有 night_victim：提交 witch_save / witch_poison / noop
+  ├─ 无 night_victim：只能提交 witch_poison / noop
   └─ 环境结算死亡，公开 night_announcement（不公开身份）
        ↓
 DAY_DISCUSSION
+  ├─ 按固定座位轮换首发，死亡玩家跳过
   ├─ 每名存活玩家提交一条 speak
   └─ 发言立即成为公开 speech Event
        ↓
 DAY_VOTE
-  ├─ 每名存活玩家提交 vote 或 abstain
+  ├─ 每名存活玩家独立提交 vote 或 abstain
+  ├─ 提交期间不公开个人票型
+  ├─ 全员提交后一次性公开 ballots 和 counts
   ├─ 唯一最高票：execution
   └─ 最高票并列：vote_tied
        ↓
@@ -136,6 +144,10 @@ PlayerObservation（仅单个 Agent）
 
 `events.jsonl` 和 `checkpoint.json` 为完整审计资料，包含私有事件；它们只能给开发者/服务器使用，不能直接提供给普通玩家或旁观者。
 
+`spectator.html` 和 `--spectate` 只消费 `event.public == true` 的事件，并按原始事件的轮次和阶段渲染时间线；它们不序列化完整 `GameState`。
+
+`god_view.html` 只有在 CLI 显式传入 `--god-view` 时生成，消费完整 `GameState`，展示身份、私有事件、recipients、payload 和规则诊断；它只适用于本地开发/裁判回放。
+
 ## Rule Policy 与 LLM Policy 的差别
 
 ```text
@@ -146,7 +158,7 @@ LLMPolicy
   Observation -> system/user prompt -> ModelAdapter -> JSON -> Action
 ```
 
-两者最后都会进入同一个 `submit_action()`。所以模型即使输出错误身份、非法目标或错误阶段行动，也只能得到 `action_rejected`，无法绕过游戏规则。
+两者最后都会进入同一个 `submit_action()`。LLMPolicy 会先将格式和可由玩家视图判断的目标语义错误降级为 `noop`；规则层仍会复核身份、阶段、资源和目标，任何未被 Policy 捕获的非法行动只能得到 `action_rejected`，无法绕过游戏规则。
 
 真实模型模式通过环境变量配置：
 
@@ -172,7 +184,9 @@ GameState + Events
   ├─ checkpoint.json：恢复整局
   ├─ events.jsonl：逐事件回放和调试
   └─ evaluate_game()
-        ├─ report.json
+  ├─ report.json
+  ├─ spectator.html：公开事件剧场回放
+  └─ god_view.html：显式开关下的完整审计回放
         └─ llm_requests.jsonl（LLM 模式）
              ├─ winner / rounds
              ├─ speech_count / vote_count

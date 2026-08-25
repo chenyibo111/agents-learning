@@ -170,10 +170,24 @@ def _validate_action(state: GameState, action: Action) -> str | None:
     if action.action_type == "noop":
         return None
     if state.phase == Phase.NIGHT_WOLF:
-        # 夜间第一阶段仅狼人可攻击，且狼人不能攻击狼人阵营。
+        # 夜间第一阶段仅狼人可私密发言；保留 wolf_kill 作为旧 checkpoint/测试的兼容输入。
         if actor.role != Role.WOLF:
             return "role_cannot_act"
-        if action.action_type != "wolf_kill":
+        if action.action_type == "wolf_speak":
+            if action.target_id is not None:
+                return "non_speech_target_not_null"
+            return None if len(action.speech) <= 240 else "speech_too_long"
+        if action.action_type == "wolf_kill":
+            target = _player(state, action.target_id)
+            if target is None or not target.alive or target.role == Role.WOLF:
+                return "invalid_target"
+            return None
+        return "invalid_phase_action"
+    if state.phase == Phase.NIGHT_WOLF_CONFIRM:
+        # 狼人确认投票独立提交；规则只在结算阶段公开票型并决定是否形成袭击。
+        if actor.role != Role.WOLF:
+            return "role_cannot_act"
+        if action.action_type != "wolf_vote":
             return "invalid_phase_action"
         target = _player(state, action.target_id)
         if target is None or not target.alive or target.role == Role.WOLF:
@@ -195,6 +209,8 @@ def _validate_action(state: GameState, action: Action) -> str | None:
         if action.action_type == "witch_save":
             if not actor.antidote_available:
                 return "antidote_unavailable"
+            if state.night_victim is None:
+                return "no_attack_to_save"
             return None if action.target_id == state.night_victim else "invalid_save_target"
         if action.action_type == "witch_poison":
             if not actor.poison_available:
@@ -236,17 +252,20 @@ def submit_action(state: GameState, action: Action) -> GameState:
                 rule="public_discussion",
             ),
         )
-    if action.action_type in {"vote", "abstain"}:
-        # 当前规则采用顺序公开投票；未来可替换为匿名同时投票策略。
+    elif action.action_type == "wolf_speak":
+        wolves = tuple(player.player_id for player in state.players if player.alive and player.role == Role.WOLF)
         state = _append_event(
             state,
             _event(
                 state,
-                "vote_cast",
-                {"voter": action.actor_id, "target": action.target_id},
-                rule="public_vote",
+                "wolf_negotiation_message",
+                {"speaker": action.actor_id, "text": action.speech},
+                public=False,
+                recipients=wolves,
+                rule="private_wolf_negotiation",
             ),
         )
+    # 投票行动暂存到 pending_actions；所有玩家完成投票后才由结算阶段一次性公开票型。
     return state
 
 
@@ -270,8 +289,8 @@ def check_winner(state: GameState) -> str | None:
     return None
 
 
-def _resolve_wolf_phase(state: GameState) -> GameState:
-    """汇总两名狼人的目标：完全一致才产生可被女巫看到的夜袭目标。"""
+def _resolve_legacy_wolf_phase(state: GameState) -> GameState:
+    """兼容旧版直接提交 wolf_kill 的状态；新流程使用确认投票。"""
     wolves = [player.player_id for player in state.players if player.alive and player.role == Role.WOLF]
     targets = [_action_for(state, wolf).target_id for wolf in wolves if _action_for(state, wolf)]
     # 缺行动、只剩一狼以外的异常或目标不一致都会被视为本晚袭击失败。
@@ -289,6 +308,53 @@ def _resolve_wolf_phase(state: GameState) -> GameState:
     )
     state = replace(state, night_victim=night_victim, pending_actions=(), phase=Phase.NIGHT_SEER)
     return _append_event(state, event)
+
+
+def _resolve_wolf_talk_phase(state: GameState) -> GameState:
+    """结算狼人私密发言，进入隐藏的最终确认投票阶段。"""
+    if any(action.action_type == "wolf_kill" for action in state.pending_actions):
+        return _resolve_legacy_wolf_phase(state)
+    return replace(state, pending_actions=(), phase=Phase.NIGHT_WOLF_CONFIRM)
+
+
+def _resolve_wolf_phase(state: GameState) -> GameState:
+    """汇总狼人确认票：完全一致才产生可被女巫看到的夜袭目标。"""
+    wolves = [player.player_id for player in state.players if player.alive and player.role == Role.WOLF]
+    ballots = {
+        wolf: (
+            _action_for(state, wolf).target_id
+            if _action_for(state, wolf) is not None and _action_for(state, wolf).action_type == "wolf_vote"
+            else None
+        )
+        for wolf in wolves
+    }
+    targets = [target for target in ballots.values() if target]
+    counts = Counter(targets)
+    consensus = len(targets) == len(wolves) and len(counts) == 1
+    night_victim = targets[0] if consensus else None
+    state = _append_event(
+        state,
+        _event(
+            state,
+            "wolf_vote_revealed",
+            {"ballots": dict(sorted(ballots.items())), "counts": dict(sorted(counts.items())), "consensus": consensus},
+            public=False,
+            recipients=tuple(wolves),
+            rule="wolf_confirm_reveal",
+        ),
+    )
+    witch = next((player.player_id for player in state.players if player.alive and player.role == Role.WITCH), None)
+    recipients = tuple(wolves + ([witch] if witch else []))
+    result_event = _event(
+        state,
+        "wolf_target_selected" if night_victim else "wolf_attack_failed",
+        {"target": night_victim},
+        public=False,
+        recipients=recipients,
+        rule="matched_wolf_target" if night_victim else "wolf_disagreement",
+    )
+    state = replace(state, night_victim=night_victim, pending_actions=(), phase=Phase.NIGHT_SEER)
+    return _append_event(state, result_event)
 
 
 def _resolve_seer_phase(state: GameState) -> GameState:
@@ -352,12 +418,29 @@ def _resolve_witch_phase(state: GameState) -> GameState:
 
 
 def _resolve_vote_phase(state: GameState) -> GameState:
-    """统计公开投票；唯一最高票出局，最高票并列则无人出局。"""
-    votes = [action.target_id for action in state.pending_actions if action.action_type == "vote" and action.target_id]
+    """隐藏收集投票，完成后公开票型并按唯一最高票结算。"""
+    ballots = {
+        action.actor_id: action.target_id
+        for action in state.pending_actions
+        if action.action_type in {"vote", "abstain"}
+    }
+    votes = [target_id for target_id in ballots.values() if target_id]
     # abstain 不进入票数统计；空票数也会走平票/无人出局分支。
     counts = Counter(votes)
     top = [player_id for player_id, count in counts.items() if count == max(counts.values())] if counts else []
     state = replace(state, pending_actions=())
+    state = _append_event(
+        state,
+        _event(
+            state,
+            "vote_revealed",
+            {
+                "ballots": dict(sorted(ballots.items())),
+                "counts": dict(sorted(counts.items())),
+            },
+            rule="vote_reveal_after_submission",
+        ),
+    )
     if len(top) == 1:
         # 唯一最高票才会产生执行，避免并列票数时引擎任意挑选受害者。
         executed = _player(state, top[0])
@@ -379,6 +462,8 @@ def advance_phase(state: GameState) -> GameState:
     if state.status != "RUNNING":
         return state
     if state.phase == Phase.NIGHT_WOLF:
+        return _resolve_wolf_talk_phase(state)
+    if state.phase == Phase.NIGHT_WOLF_CONFIRM:
         return _resolve_wolf_phase(state)
     if state.phase == Phase.NIGHT_SEER:
         return _resolve_seer_phase(state)

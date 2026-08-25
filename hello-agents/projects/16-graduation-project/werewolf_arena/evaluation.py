@@ -19,6 +19,11 @@ def evaluate_game(state: GameState, *, offline: bool = True) -> dict[str, Any]:
             encoded = json.dumps(event.to_dict(), ensure_ascii=False)
             leaks.extend(item for item in forbidden if item in encoded)
     # report 保持 JSON 基础类型，便于 CLI、文件和未来 Web API 复用。
+    revealed_vote_count = sum(
+        len(event.payload.get("ballots", {}))
+        for event in state.events
+        if event.event_type == "vote_revealed"
+    )
     return {
         "status": state.status,
         "winner": state.winner or "draw",
@@ -27,7 +32,7 @@ def evaluate_game(state: GameState, *, offline: bool = True) -> dict[str, Any]:
         "event_types": dict(sorted(counts.items())),
         "rejected_action_count": counts["action_rejected"],
         "speech_count": counts["speech"],
-        "vote_count": counts["vote_cast"],
+        "vote_count": counts["vote_cast"] + revealed_vote_count,
         "metrics": dict(state.metrics),
         "rule_compliance": {"passed": counts["action_rejected"] == 0},
         "privacy_audit": {"passed": not leaks, "leaks": sorted(set(leaks))},

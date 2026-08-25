@@ -85,3 +85,51 @@
 - [x] Implement atomic persistence, reporting and the CLI.
 - [x] Update documentation with configuration, limitations, tests and six-agent rule set.
 - [x] Run focused and related project regression tests, then `git diff --check`.
+
+---
+
+### Task 5: 补充女巫、隐藏投票与轮换发言规则
+
+**Files:**
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/rules.py`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/visibility.py`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/engine.py`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/schemas.py` (if phase/order metadata needs persistence)
+- Modify: `hello-agents/projects/16-graduation-project/README.md`
+- Modify: `hello-agents/projects/16-graduation-project/FLOW.md`
+- Modify: `hello-agents/projects/16-graduation-project/PRODUCT_READINESS.md`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/ISSUES.md`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/FIXES.md`
+- Test: `hello-agents/tests/test_werewolf_arena.py`
+
+**Confirmed rules:**
+
+- [x] 当两名狼人没有形成袭击目标时，女巫不能使用解药；`witch_save` 必须被拒绝，解药不能消耗，也不能产生 `night_saved(target=null)` 事件。
+- [x] 投票阶段所有玩家独立提交行动；投票提交期间不生成公开的个人投票事件，后续玩家不能从 Observation 看到前面玩家的投票。
+- [x] 所有存活玩家完成投票后，一次性公开每名玩家的具体票型和总票数，再按唯一最高票出局或平票无人出局。
+- [x] 白天发言采用固定座位的轮换首发顺序：第 1 轮从 `alice` 开始，第 2 轮从 `bob` 开始，之后按固定座位顺时针轮换；死亡玩家跳过，每名存活玩家发言一次，后续玩家可以看到前序发言。
+- [x] 发言顺序必须可由 seed、轮次和存活名单确定，并能在 checkpoint 恢复后保持一致。
+
+**Implementation checklist:**
+
+- [x] 先补充女巫无袭击目标、投票期间隐私、投票结束公开票型、轮换发言顺序和恢复一致性的失败测试。
+- [x] 修改规则层，使投票提交阶段只保存 pending action，不立即产生公开 `vote_cast` 事件。
+- [x] 在投票阶段结算后生成包含个人票型、票数和结算结果的单次公开事件。
+- [x] 修改 Engine 的讨论阶段调度，使用轮换后的 speaker order，而不是固定玩家列表顺序。
+- [x] 更新 LLM Prompt 和玩家 Observation，明确投票期间看不到其他人的投票，并暴露当前发言顺序。
+- [x] 运行第 16 课专项测试、全量测试和 `git diff --check`；专项 48 项通过，全量 250 项通过（4 项跳过）。
+
+### Task 6: LLM 目标语义提前校验
+
+**Files:**
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/policies.py`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/ISSUES.md`
+- Modify: `hello-agents/projects/16-graduation-project/werewolf_arena/FIXES.md`
+- Test: `hello-agents/tests/test_werewolf_arena.py`
+
+**Implementation checklist:**
+
+- [x] 为已死亡目标、自己、狼人队友和错误解药目标补充 Policy 层失败测试。
+- [x] 在 `LLMPolicy` 入口校验狼人击杀、预言家查验、女巫毒药和解药目标语义，失败时安全降级为 `noop`。
+- [x] 保留 `rules.py` 最终校验，并验证不会产生 `action_rejected`。
+- [x] 运行专项 52 项、全量 254 项（4 项跳过）和 `git diff --check`。

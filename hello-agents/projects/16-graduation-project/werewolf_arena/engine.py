@@ -1,14 +1,16 @@
 """按游戏阶段调度 Policy、规则和 checkpoint 的运行时。"""
 
 from dataclasses import replace
+from collections.abc import Callable
 from pathlib import Path
 from typing import Mapping
 
+from .narrative import render_public_events
 from .policies import Policy, RulePolicy
 from .rules import advance_phase, finish_draw, initial_game, submit_action
 from .schemas import GameState, Phase, Role
 from .storage import CheckpointStore
-from .visibility import observation_for
+from .visibility import discussion_order, observation_for
 
 
 class GameEngine:
@@ -21,13 +23,15 @@ class GameEngine:
 
     def _actors_for_phase(self, state: GameState) -> list[str]:
         """列出当前阶段必须行动的存活玩家，确保死人不会被调度。"""
-        if state.phase == Phase.NIGHT_WOLF:
+        if state.phase in {Phase.NIGHT_WOLF, Phase.NIGHT_WOLF_CONFIRM}:
             return [player.player_id for player in state.players if player.alive and player.role == Role.WOLF]
         if state.phase == Phase.NIGHT_SEER:
             return [player.player_id for player in state.players if player.alive and player.role == Role.SEER]
         if state.phase == Phase.NIGHT_WITCH:
             return [player.player_id for player in state.players if player.alive and player.role == Role.WITCH]
-        if state.phase in {Phase.DAY_DISCUSSION, Phase.DAY_VOTE}:
+        if state.phase == Phase.DAY_DISCUSSION:
+            return discussion_order(state)
+        if state.phase == Phase.DAY_VOTE:
             return [player.player_id for player in state.players if player.alive]
         return []
 
@@ -45,6 +49,7 @@ class GameEngine:
         interrupt_after_phase: Phase | None = None,
         checkpoint_path: Path | None = None,
         initial_state: GameState | None = None,
+        on_public_event: Callable[[str], None] | None = None,
     ) -> GameState:
         """从新局或已有 checkpoint 状态运行到胜负、平局或指定中断点。"""
         if max_rounds < 1:
@@ -59,7 +64,15 @@ class GameEngine:
                 state = finish_draw(state)
                 break
             # 每次循环只推进一个阶段，便于 checkpoint、回放和定位失败。
+            event_count = len(state.events)
             state = self._advance_one_phase(state)
+            if on_public_event:
+                for line in render_public_events(state.events[event_count:]):
+                    try:
+                        on_public_event(line)
+                    except Exception:
+                        # 观战输出故障不能改变游戏状态或阻断 checkpoint。
+                        pass
             if checkpoint_path:
                 CheckpointStore(Path(checkpoint_path)).save(state)
             if interrupt_after_phase is not None and state.phase == interrupt_after_phase and state.status == "RUNNING":
@@ -73,11 +86,18 @@ class GameEngine:
         return state
 
     @classmethod
-    def resume(cls, checkpoint_path: Path, max_rounds: int = 3, policies: Mapping[str, Policy] | None = None) -> GameState:
+    def resume(
+        cls,
+        checkpoint_path: Path,
+        max_rounds: int = 3,
+        policies: Mapping[str, Policy] | None = None,
+        on_public_event: Callable[[str], None] | None = None,
+    ) -> GameState:
         """读取版本化 checkpoint，并使用原 seed 和可选新策略继续该局。"""
         state = CheckpointStore(Path(checkpoint_path)).load()
         return cls(seed=state.seed, policies=policies).run(
             max_rounds=max_rounds,
             checkpoint_path=Path(checkpoint_path),
             initial_state=state,
+            on_public_event=on_public_event,
         )

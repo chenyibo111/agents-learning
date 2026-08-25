@@ -31,6 +31,9 @@ ACTION_ALIASES = {
     "kill": "wolf_kill",
     "wolf_attack": "wolf_kill",
     "night_kill": "wolf_kill",
+    "confirm_kill": "wolf_vote",
+    "wolf_confirm": "wolf_vote",
+    "wolf_target_vote": "wolf_vote",
     "night_seer": "inspect",
     "seer_check": "inspect",
     "check": "inspect",
@@ -48,7 +51,8 @@ ACTION_ALIASES = {
 }
 
 PHASE_ACTION_TYPES = {
-    Phase.NIGHT_WOLF: {"wolf_kill", "noop"},
+    Phase.NIGHT_WOLF: {"wolf_speak", "noop"},
+    Phase.NIGHT_WOLF_CONFIRM: {"wolf_vote", "noop"},
     Phase.NIGHT_SEER: {"inspect", "noop"},
     Phase.NIGHT_WITCH: {"witch_save", "witch_poison", "noop"},
     Phase.DAY_DISCUSSION: {"speak", "noop"},
@@ -508,8 +512,41 @@ def _validate_model_action(value: Any, action_type: str, observation: PlayerObse
         raise SchemaValidationError("decision_label_too_long")
     if action_type not in PHASE_ACTION_TYPES.get(phase, {"noop"}):
         raise SchemaValidationError("phase_action_type")
+    target_id = value.get("target_id")
+    alive_players = set(observation.public.get("alive_players", ()))
+    if phase == Phase.NIGHT_WOLF and action_type == "wolf_speak":
+        if target_id is not None:
+            raise SchemaValidationError("non_speech_target_not_null")
+    elif phase == Phase.NIGHT_WOLF_CONFIRM and action_type == "wolf_vote":
+        if not isinstance(target_id, str) or not target_id.strip():
+            raise SchemaValidationError("wolf_vote_target_missing")
+        if target_id not in alive_players:
+            raise SchemaValidationError("wolf_vote_target_not_alive")
+        if target_id == observation.player_id:
+            raise SchemaValidationError("wolf_vote_self_target")
+        if target_id in set(observation.private.get("wolf_teammates", ())):
+            raise SchemaValidationError("wolf_vote_target_is_wolf")
+    elif phase == Phase.NIGHT_SEER and action_type == "inspect":
+        if not isinstance(target_id, str) or not target_id.strip():
+            raise SchemaValidationError("inspect_target_missing")
+        if target_id not in alive_players:
+            raise SchemaValidationError("inspect_target_not_alive")
+        if target_id == observation.player_id:
+            raise SchemaValidationError("inspect_self_target")
+    elif phase == Phase.NIGHT_WITCH and action_type == "witch_save":
+        night_victim = observation.private.get("night_victim")
+        if night_victim is None:
+            raise SchemaValidationError("no_attack_to_save")
+        if target_id != night_victim:
+            raise SchemaValidationError("save_target_mismatch")
+    elif phase == Phase.NIGHT_WITCH and action_type == "witch_poison":
+        if not isinstance(target_id, str) or not target_id.strip():
+            raise SchemaValidationError("poison_target_missing")
+        if target_id not in alive_players:
+            raise SchemaValidationError("poison_target_not_alive")
+        if target_id == observation.player_id:
+            raise SchemaValidationError("poison_self_target")
     if phase == Phase.DAY_VOTE:
-        target_id = value.get("target_id")
         if action_type == "vote":
             if not isinstance(target_id, str) or not target_id.strip():
                 raise SchemaValidationError("vote_target_missing")
@@ -539,10 +576,18 @@ class RulePolicy:
         private = observation.private
         role = private["role"]
         if observation.phase == Phase.NIGHT_WOLF:
+            # 协商阶段先提交一条私密建议，确认目标留到下一阶段。
+            return Action(
+                self.player_id,
+                "wolf_speak",
+                speech="我建议先观察公开票型，再统一确认目标。",
+                decision_label="private_wolf_talk",
+            )
+        if observation.phase == Phase.NIGHT_WOLF_CONFIRM:
             # 两只狼使用相同的“第一个非狼人”规则，确保离线演示会形成协同攻击。
             team = {self.player_id, *private.get("wolf_teammates", [])}
             target = next((player for player in alive if player not in team), None)
-            return Action(self.player_id, "wolf_kill", target, decision_label="shared_wolf_target")
+            return Action(self.player_id, "wolf_vote", target, decision_label="shared_wolf_confirmation")
         if observation.phase == Phase.NIGHT_SEER:
             # 预言家优先查验未查过的存活玩家，避免重复查验浪费回合。
             inspected = {item["target"] for item in private.get("inspection_results", [])}
