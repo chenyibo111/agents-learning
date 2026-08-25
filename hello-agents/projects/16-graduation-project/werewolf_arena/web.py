@@ -87,6 +87,7 @@ class Room:
         policies: Mapping[str, Any] | None = None,
         policy_mode: str = "rule",
         model_name: str = "",
+        pricing_configured: bool = False,
         request_collector: RequestTraceCollector | None = None,
     ):
         self.state = state
@@ -95,6 +96,7 @@ class Room:
         self.max_rounds = max(1, int(max_rounds))
         self.policy_mode = policy_mode
         self.model_name = model_name
+        self.pricing_configured = pricing_configured
         self.request_collector = request_collector or RequestTraceCollector()
         self._state_lock = threading.RLock()
         self._step_lock = threading.Lock()
@@ -186,6 +188,7 @@ class Room:
             "game_id": current_state.game_id,
             "policy_mode": self.policy_mode,
             "model": self.model_name or None,
+            "pricing_configured": self.pricing_configured,
             "state": current_state.to_dict(),
             "events": [event.to_dict() for event in events],
             "cursor": len(current_state.events),
@@ -229,6 +232,14 @@ class RoomStore:
             collector = RequestTraceCollector()
             policies = _build_policies(state, self.policy_mode, self.model_adapter, collector.append)
             model_name = getattr(self.model_adapter, "model", "") if self.policy_mode == "llm" else ""
+            pricing_configured = bool(
+                self.policy_mode == "llm"
+                and self.model_adapter is not None
+                and (
+                    getattr(self.model_adapter, "input_price_per_million", 0.0) > 0
+                    or getattr(self.model_adapter, "output_price_per_million", 0.0) > 0
+                )
+            )
             self._room = Room(
                 state,
                 step_interval=self.step_interval,
@@ -236,6 +247,7 @@ class RoomStore:
                 policies=policies,
                 policy_mode=self.policy_mode,
                 model_name=model_name,
+                pricing_configured=pricing_configured,
                 request_collector=collector,
             )
             return self._room
@@ -257,14 +269,14 @@ class RoomStore:
             room.stop()
 
 
-def _cursor(query: dict[str, list[str]]) -> int:
-    value = query.get("after", ["0"])[0]
+def _cursor(query: dict[str, list[str]], name: str = "after") -> int:
+    value = query.get(name, ["0"])[0]
     try:
         result = int(value)
     except ValueError as exc:
-        raise InvalidCursorError("after must be a non-negative integer") from exc
+        raise InvalidCursorError(f"{name} must be a non-negative integer") from exc
     if result < 0:
-        raise InvalidCursorError("after must be a non-negative integer")
+        raise InvalidCursorError(f"{name} must be a non-negative integer")
     return result
 
 
@@ -274,6 +286,9 @@ def _summary(room: Room) -> dict[str, Any]:
         return {
             "game_id": state.game_id,
             "seed": state.seed,
+            "policy_mode": room.policy_mode,
+            "model": room.model_name or None,
+            "pricing_configured": room.pricing_configured,
             "phase": state.phase.value,
             "round_number": state.round_number,
             "status": state.status,
@@ -370,8 +385,12 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
                     self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
                     return
                 room, view = route
-                after = _cursor(parse_qs(parsed.query))
-                self._send_json(room.snapshot(after) if view == "audit" else public_snapshot(room, after))
+                query = parse_qs(parsed.query)
+                after = _cursor(query, "after")
+                request_after = _cursor(query, "request_after")
+                self._send_json(
+                    room.snapshot(after, request_after) if view == "audit" else public_snapshot(room, after)
+                )
             except RoomNotFoundError:
                 self._send_error(HTTPStatus.NOT_FOUND, "room_not_found", "room not found")
             except InvalidCursorError as exc:

@@ -40,7 +40,8 @@ class WerewolfWebTests(unittest.TestCase):
     """覆盖 Web 垂直切片依赖的引擎和本地服务契约。"""
 
     def setUp(self):
-        self.http_store = RoomStore(step_interval=60.0)
+        self.http_adapter = ScriptedModelAdapter(['{"action_type": "wolf_speak", "speech": "先观察公开票型。"}'])
+        self.http_store = RoomStore(policy_mode="llm", model_adapter=self.http_adapter, step_interval=60.0)
         self.http_server = build_server("127.0.0.1", 0, store=self.http_store)
         self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
         self.http_thread.start()
@@ -176,6 +177,31 @@ class WerewolfWebTests(unittest.TestCase):
         response = self.request_json("GET", "/api/rooms/missing/audit", expect_error=True)
         self.assertEqual(response.status, 404)
         self.assertEqual(response.payload["error"], "room_not_found")
+
+    def test_audit_api_returns_independent_event_and_request_cursors(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        room = self.http_store.get(created.payload["game_id"])
+        room.step_once()
+
+        response = self.request_json("GET", f"/api/rooms/{room.game_id}/audit?after=0&request_after=1")
+
+        self.assertEqual(response.payload["cursor"], len(response.payload["state"]["events"]))
+        self.assertEqual(response.payload["request_cursor"], 2)
+        self.assertEqual(len(response.payload["llm_requests"]), 1)
+        self.assertEqual(response.payload["policy_mode"], "llm")
+
+    def test_public_llm_snapshot_omits_request_traces_and_private_state(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        room = self.http_store.get(created.payload["game_id"])
+        room.step_once()
+
+        response = self.request_json("GET", f"/api/rooms/{room.game_id}/public?after=0&request_after=0")
+        body = json.dumps(response.payload, ensure_ascii=False)
+
+        self.assertNotIn("llm_requests", body)
+        self.assertNotIn('"role"', body)
+        self.assertNotIn('"pending_actions"', body)
+        self.assertNotIn('"public": false', body)
 
     def test_audit_page_contains_timeline_and_polling_contract(self):
         html = WEB_HTML.read_text(encoding="utf-8")
