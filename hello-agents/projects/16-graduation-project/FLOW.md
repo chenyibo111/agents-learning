@@ -31,7 +31,7 @@ GameEngine.run()
           ├─ on_public_event：只将公开事件转换为终端观战叙事
           ├─ CheckpointStore：每阶段保存 checkpoint.json
           ├─ LLMPolicy + RequestTraceStore：LLM 模式增量写 llm_requests.jsonl
-          └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl、spectator.html；`--god-view` 时额外写 god_view.html
+          └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl、spectator.html；Web 房间额外写 god_view.html
 ```
 
 ## Web 时间线审计流
@@ -45,14 +45,16 @@ RoomStore：创建唯一内存 Room + initial_game(seed)
   ▼
 后台 worker
   └─ GameEngine.step()
-       └─ observation_for → RulePolicy → submit_action → advance_phase
+       └─ observation_for → RulePolicy / 六个 LLMPolicy → submit_action → advance_phase
   ▼
-Room 快照：完整 GameState + 稳定事件游标
+Room 快照：完整 GameState + 事件游标 + 脱敏请求游标
   ▲
-  └─ GET /api/rooms/{id}/audit?after=N（每 500ms 增量轮询）
+  └─ GET /api/rooms/{id}/audit?after=N&request_after=M（每 500ms 双游标增量轮询）
 ```
 
-Web 第一条垂直切片只绑定 `127.0.0.1`，自动使用离线 `RulePolicy`，页面是开发/裁判审计台，不接受浏览器提交的 `Action`，也不在进程重启后承诺恢复。`/public` API 使用显式字段白名单和 `event.public` 过滤，保留普通观战页的权限边界。
+Web 垂直切片只绑定 `127.0.0.1`，按启动参数选择离线 `RulePolicy` 或真实 `LLMPolicy`，页面是开发/裁判审计台，不接受浏览器提交的 `Action`，也不在进程重启后承诺恢复。模型请求期间 GameState 锁不被网络调用长期占用，审计 API 可以继续读取最近一次已提交快照。`/public` API 使用显式字段白名单和 `event.public` 过滤，保留普通观战页的权限边界。
+
+真实 LLM 房间会为六名玩家创建独立 Policy，共享一个模型适配器；每次逻辑决策通过 `RequestTraceCollector` 生成脱敏摘要，使用独立 `request_cursor` 增量返回并同步写入房间目录的 `llm_requests.jsonl`。页面只渲染 Agent、阶段、请求/决策状态、耗时、Token、费用、截断和降级原因，不渲染 Prompt、原始响应、endpoint 或密钥。
 
 最重要的边界是：`Policy` 只能读取 `PlayerObservation`，只有 `rules.py` 能改变 `GameState`。因此模型不能自报身份、伪造查验结果或直接宣布胜利。
 
@@ -167,7 +169,7 @@ PlayerObservation（仅单个 Agent）
 
 `spectator.html` 和 `--spectate` 只消费 `event.public == true` 的事件，并按原始事件的轮次和阶段渲染时间线；它们不序列化完整 `GameState`。
 
-`god_view.html` 只有在 CLI 显式传入 `--god-view` 时生成，消费完整 `GameState`，展示身份、私有事件、recipients、payload 和规则诊断；它只适用于本地开发/裁判回放。
+`god_view.html` 在 CLI 显式传入 `--god-view` 或 Web 房间运行阶段后生成，消费完整 `GameState`，展示身份、私有事件、recipients、payload 和规则诊断；它只适用于本地开发/裁判回放。
 
 ## Rule Policy 与 LLM Policy 的差别
 
@@ -200,6 +202,15 @@ WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION
 
 默认 `--policy rule` 完全离线；只有显式传入 `--policy llm` 才可能产生网络调用和费用。
 
+Web 真实模型启动示例：
+
+```bash
+cd hello-agents/projects/16-graduation-project
+python -m werewolf_arena.web --policy llm --port 8767 --seed 7 --max-rounds 4 --step-interval 0.5
+```
+
+每个阶段推进后，Web 房间的 `runs/<timestamp>-seed-<seed>-<id>/` 会更新 `checkpoint.json`、`events.jsonl`、`report.json`、`spectator.html`、`god_view.html`；LLM 模式再追加 `llm_requests.jsonl`。`Room.snapshot()` 的 `artifacts.run_dir` 指向该目录，便于裁判回放定位同一局。
+
 ## 工件与评测流
 
 ```text
@@ -209,7 +220,7 @@ GameState + Events
   └─ evaluate_game()
   ├─ report.json
   ├─ spectator.html：公开事件剧场回放
-  └─ god_view.html：显式开关下的完整审计回放
+  └─ god_view.html：CLI 显式开关或 Web 房间自动生成的完整审计回放
         └─ llm_requests.jsonl（LLM 模式）
              ├─ winner / rounds
              ├─ speech_count / vote_count

@@ -27,13 +27,21 @@ cd hello-agents/projects/16-graduation-project
 python -m werewolf_arena.web --port 8765 --seed 7
 ```
 
+使用 `.env` 中的真实模型配置启动六名真实 LLM 玩家：
+
+```bash
+python -m werewolf_arena.web --policy llm --port 8767 --seed 7 --max-rounds 4 --step-interval 0.5
+```
+
+启动后访问 `http://127.0.0.1:8767/`，页面右上角显示 `REAL LLM`、模型名和价格配置状态。
+
 默认是六个离线规则 Agent，不联网。`--output-dir` 生成：
 
 - `checkpoint.json`：完整、版本化的引擎状态；
 - `events.jsonl`：按事件存放的审计轨迹；
 - `report.json`：胜负、规则合规、隐私、模型成本和决策观测指标报告；
 - `spectator.html`：只包含公开叙事和存活状态的自包含剧场观战页；
-- `god_view.html`：仅在显式 `--god-view` 下生成的完整身份和事件审计页；
+- `god_view.html`：CLI 仅在显式 `--god-view` 下生成；Web 房间按阶段自动更新的完整身份和事件审计页；
 - `llm_requests.jsonl`：仅在 LLM 模式生成的脱敏请求级追踪，不包含完整 Prompt、原始响应或 API Key。
 
 未传 `--output-dir` 时，以上工件会自动生成在项目目录的 `runs/<时间戳>-seed-<seed>-<随机标识>/` 下；`runs/` 已被 Git 忽略，避免对局记录混入源码提交。
@@ -61,25 +69,25 @@ python -m werewolf_arena.web --port 8765 --seed 7
 - `evaluation.py`：规则拒绝、发言、投票、隐私泄露和模型成本指标。
 - `narrative.py` / `spectator.py`：公开事件叙事和不含身份的静态剧场观战页。
 - `god_view.py`：仅供开发/裁判使用的完整状态时间线和规则诊断页。
-- `web.py` / `web.html`：本地单房间 Web 服务和时间线审计台；自动使用 RulePolicy 推进，不提供玩家 Action 注入。
+- `web.py` / `web.html`：本地单房间 Web 服务和时间线审计台；按 `--policy` 选择 RulePolicy 或真实 LLM，不提供玩家 Action 注入。
 
 ## Web 垂直切片
 
 当前已提供一条用于开发验证和裁判回放的 Web 闭环：
 
 1. 打开 `http://127.0.0.1:8765/`，创建指定 seed 的单房间；
-2. 点击“开始自动回放”，服务端后台按阶段运行 RulePolicy；
-3. 页面每 500ms 轮询裁判 API，展示完整事件时间线、选中事件 payload、GameState 快照和指标；
+2. 点击“开始自动回放”，服务端后台按阶段运行 RulePolicy 或六名独立的 LLMPolicy；
+3. 页面每 500ms 轮询裁判 API，使用事件游标和请求游标展示完整事件时间线、选中事件 payload、GameState 快照、指标和脱敏 LLM 请求流；
 4. 页面只读，完整身份和私有事件仅通过本地审计 API 暴露，不代表普通玩家权限。
 
 主要接口：
 
 - `POST /api/rooms`：创建单房间；
 - `POST /api/rooms/{game_id}/start`：启动自动回放；
-- `GET /api/rooms/{game_id}/audit?after=N`：读取完整裁判视图和增量事件；
+- `GET /api/rooms/{game_id}/audit?after=N&request_after=M`：读取完整裁判视图、事件增量和 LLM 请求增量；
 - `GET /api/rooms/{game_id}/public?after=N`：读取过滤后的公开事件边界。
 
-该切片使用 Python 标准库 HTTP 服务、内存状态和短轮询，暂不包含认证、数据库、多房间、SSE/WebSocket、真实 LLM 或人类玩家。
+该切片使用 Python 标准库 HTTP 服务、内存状态和短轮询；真实 LLM 模式只在显式传入 `--policy llm` 时启用，并自动把每个房间的审计工件写入 `runs/`。仍暂不包含认证、数据库、多房间、SSE/WebSocket 或人类玩家。
 
 ## 真实模型模式
 
@@ -104,6 +112,8 @@ $env:WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION = "0"
 ```
 
 六名玩家会使用独立的 Policy 上下文，但共享同一个可配置模型适配器。模型必须返回 JSON：`action_type`、`target_id`、`speech`、`decision_label`。Prompt 会按阶段声明允许的行动，Policy 会将常见别名（如 `kill`、`speech`）归一化，并在规则层之前执行核心字段、长度、阶段、投票目标和夜间目标语义 Schema 校验；`decision_label` 只是可选辅助元数据，缺失、`null` 或非字符串会归一化为空字符串。投票必须指向存活且不是自己的玩家；弃票或 `noop` 不得携带目标。格式或核心 Schema 失败时最多追加一次短修复请求，仍失败才使用安全 `noop`；规则引擎仍保留对所有合法性条件的最终拒绝防线；密钥不会写进 checkpoint、事件或报告。
+
+Web 审计台不会渲染 Prompt、原始响应、endpoint 或 API Key，只展示请求状态、Agent、阶段、耗时、Token、费用、截断和降级原因。请求期间 `/audit` 仍可读取最近一次已提交的 GameState；每个房间会增量保存 `llm_requests.jsonl`，并在阶段推进后更新 `checkpoint.json`、`events.jsonl`、`report.json`、`spectator.html` 和 `god_view.html`。
 
 LLM 适配器默认关闭 thinking，并将结构化行动初始输出上限设为 2048；当供应商返回 `finish_reason=length` 时，最多按 `WEREWOLF_LLM_MAX_OUTPUT_RETRIES` 次将预算升档，最高不超过 `WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT`（默认 4096），仍截断才安全降级。`WEREWOLF_LLM_THINKING=auto` 会省略供应商专属字段，`enabled` 可恢复思考模式。适配器对超时、网络错误、HTTP 408/425/429 和 5xx 做有限重试；401/其他 4xx 不重试。重试耗尽后返回安全的 `noop`，并在 `decision_label`、`model_failures` 和 stderr 进度日志中保留非敏感失败原因，整局不会因为单个模型请求超时而崩溃。`max_tokens` 限制模型输出上限，价格环境变量按百万 Token 计算 `cost_usd`。`--progress` 只输出请求阶段、尝试次数、错误码、截断原因和耗时，不输出 Prompt、响应或 API Key。
 
@@ -140,7 +150,7 @@ python -m http.server 8766 --directory hello-agents\projects\16-graduation-proje
 
 ## 限制与下一步
 
-当前版本是单进程、回合制核心，已提供静态观战页、开发/裁判 `god_view.html` 和本地 Web 时间线审计台，但还不是面向用户发布的完整 Web 产品。白天仍是每人一轮发言，默认规则 Policy 仅用于稳定回归，并不代表高水平游戏策略。发言依赖前序公开事件，因此讨论阶段保持串行；投票虽然独立提交，但在全员完成前不会公开票型。后续可在保持同一阶段语义的前提下增加多轮讨论、SSE/WebSocket、持久化房间、认证、数据库、人类玩家、Prompt 版本实验、Elo/胜率评测和公开玩家页面。
+当前版本是单进程、回合制核心，已提供静态观战页、开发/裁判 `god_view.html` 和支持 RulePolicy/真实 LLM 的本地 Web 时间线审计台，但还不是面向用户发布的完整 Web 产品。白天仍是每人一轮发言，规则 Policy 仅用于稳定回归，并不代表高水平游戏策略；真实模型模式需要显式启动并承担网关调用成本。发言依赖前序公开事件，因此讨论阶段保持串行；投票虽然独立提交，但在全员完成前不会公开票型。后续可在保持同一阶段语义的前提下增加多轮讨论、SSE/WebSocket、持久化房间、认证、数据库、人类玩家、Prompt 版本实验、Elo/胜率评测和公开玩家页面。
 
 测试：
 
@@ -148,3 +158,5 @@ python -m http.server 8766 --directory hello-agents\projects\16-graduation-proje
 .\.venv\Scripts\python.exe -m unittest hello-agents\tests\test_werewolf_arena.py -v
 .\.venv\Scripts\python.exe -m unittest hello-agents\tests\test_werewolf_web.py -v
 ```
+
+当前回归证据：狼人杀核心 72/72、Web 16/16、仓库全量 290/290（4 个与真实第三方框架相关的 smoke test 按配置跳过）。
