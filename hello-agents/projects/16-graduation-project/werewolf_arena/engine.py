@@ -35,19 +35,37 @@ class GameEngine:
             return [player.player_id for player in state.players if player.alive]
         return []
 
-    def _advance_one_phase(self, state: GameState) -> GameState:
+    def _advance_one_phase(
+        self,
+        state: GameState,
+        on_actor_start: Callable[[GameState, str], None] | None = None,
+        on_actor_complete: Callable[[GameState, str], None] | None = None,
+    ) -> GameState:
         """依次收集本阶段行动，再由规则引擎一次性结算阶段结果。"""
         for player_id in self._actors_for_phase(state):
             # Observation 在每次行动前重新生成：白天后序玩家可看到前序公开发言/投票。
+            if on_actor_start is not None:
+                on_actor_start(state, player_id)
             policy = self.policies.get(player_id, RulePolicy(player_id))
             state = submit_action(state, policy.decide(observation_for(state, player_id)))
+            if on_actor_complete is not None:
+                on_actor_complete(state, player_id)
         return advance_phase(state)
 
-    def step(self, state: GameState) -> GameState:
+    def step(
+        self,
+        state: GameState,
+        on_actor_start: Callable[[GameState, str], None] | None = None,
+        on_actor_complete: Callable[[GameState, str], None] | None = None,
+    ) -> GameState:
         """收集并结算当前阶段一次，供 Web worker 和单步测试复用。"""
         if state.status != "RUNNING":
             return state
-        return self._advance_one_phase(state)
+        return self._advance_one_phase(
+            state,
+            on_actor_start=on_actor_start,
+            on_actor_complete=on_actor_complete,
+        )
 
     def run(
         self,

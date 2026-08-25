@@ -174,6 +174,9 @@ class Room:
         self.worker_error: str | None = None
         self.human_player_id: str | None = None
         self.human_policy: HumanPolicy | None = None
+        self._in_flight_player_id: str | None = None
+        self._in_flight_phase: Phase | None = None
+        self._in_flight_state: GameState | None = None
         self._session_tokens: dict[str, str] = {}
         self._session_by_player: dict[str, str] = {}
 
@@ -198,13 +201,44 @@ class Room:
                 next_state = finish_draw(current_state)
             else:
                 # 模型请求在状态锁之外执行，审计 API 可以读取最近一次已提交快照。
-                next_state = self.engine.step(current_state)
+                try:
+                    next_state = self.engine.step(
+                        current_state,
+                        on_actor_start=self._mark_in_flight_actor,
+                        on_actor_complete=self._update_in_flight_state,
+                    )
+                except Exception:
+                    self._clear_in_flight_actor()
+                    raise
             with self._state_lock:
                 self.state = next_state
+                self._in_flight_player_id = None
+                self._in_flight_phase = None
+                self._in_flight_state = None
             self._persist()
             if next_state.status != "RUNNING":
                 self._done_event.set()
             return next_state
+
+    def _mark_in_flight_actor(self, state: GameState, player_id: str) -> None:
+        """记录阶段内当前正在等待 Policy 返回的玩家，供玩家接口实时显示。"""
+        with self._state_lock:
+            self._in_flight_player_id = player_id
+            self._in_flight_phase = state.phase
+            self._in_flight_state = state
+
+    def _update_in_flight_state(self, state: GameState, _player_id: str) -> None:
+        """保存当前阶段已完成行动的临时状态，让前序公开事件即时可见。"""
+        with self._state_lock:
+            if self._in_flight_phase == state.phase:
+                self._in_flight_state = state
+
+    def _clear_in_flight_actor(self) -> None:
+        """阶段结算或异常后清理进行中玩家，避免下一阶段读取旧值。"""
+        with self._state_lock:
+            self._in_flight_player_id = None
+            self._in_flight_phase = None
+            self._in_flight_state = None
 
     def start(self) -> None:
         """幂等启动 daemon worker。"""
@@ -273,9 +307,13 @@ class Room:
             raise InvalidCursorError("after must be a non-negative integer")
         player_id = self._player_for_token(token)
         with self._state_lock:
-            state = self.state
+            state = self._in_flight_state or self.state
             human_policy = self.human_policy
-            active_player_id = self._active_player(state)
+            active_player_id = (
+                self._in_flight_player_id
+                if self._in_flight_phase == state.phase
+                else self._active_player(state)
+            )
             player = next(item for item in state.players if item.player_id == player_id)
             authorized_events = [
                 event for event in state.events[after:]

@@ -171,8 +171,8 @@ class OpenAICompatibleModelAdapter:
             max_retries=_environment_int("WEREWOLF_LLM_MAX_RETRIES", 1),
             retry_backoff_seconds=_environment_float("WEREWOLF_LLM_RETRY_BACKOFF_SECONDS", 0.5),
             on_event=on_event,
-            input_price_per_million=_environment_float("WEREWOLF_LLM_INPUT_PRICE_PER_MILLION", 0.0),
-            output_price_per_million=_environment_float("WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION", 0.0),
+            input_price_per_million=_environment_float("WEREWOLF_LLM_INPUT_PRICE_PER_MILLION", 0.1),
+            output_price_per_million=_environment_float("WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION", 4.5),
             max_output_tokens=max_output_tokens,
             max_output_tokens_limit=_environment_int(
                 "WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT", max(4096, max_output_tokens)

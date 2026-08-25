@@ -4,6 +4,7 @@ import sys
 import subprocess
 import time
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 import threading
@@ -298,6 +299,53 @@ class WerewolfWebTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(room.state.phase, Phase.NIGHT_WOLF_CONFIRM)
 
+    def test_player_snapshot_tracks_in_flight_human_discussion_turn(self):
+        """阶段内前序玩家完成后，玩家视图必须暴露当前真人发言轮次。"""
+        store = RoomStore(policy_mode="rule", step_interval=0.0)
+        room = store.create(seed=7)
+        room.state = replace(room.state, phase=Phase.DAY_DISCUSSION)
+        token = room.create_player_session("carol")
+        room.start()
+        try:
+            deadline = time.monotonic() + 1.0
+            snapshot = None
+            while time.monotonic() < deadline:
+                snapshot = room.player_snapshot(token)
+                if snapshot["can_act"]:
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(snapshot)
+            self.assertTrue(snapshot["can_act"])
+            self.assertEqual("carol", snapshot["active_player_id"])
+            self.assertEqual(["speak"], snapshot["allowed_actions"])
+        finally:
+            store.close()
+
+    def test_player_snapshot_includes_prior_public_discussion_speeches(self):
+        """真人轮到发言时，玩家视图必须包含此前已完成的公开发言。"""
+        store = RoomStore(policy_mode="rule", step_interval=0.0)
+        room = store.create(seed=7)
+        room.state = replace(room.state, phase=Phase.DAY_DISCUSSION)
+        token = room.create_player_session("david")
+        room.start()
+        try:
+            deadline = time.monotonic() + 1.0
+            snapshot = None
+            while time.monotonic() < deadline:
+                snapshot = room.player_snapshot(token)
+                if snapshot["can_act"]:
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(snapshot)
+            speakers = [
+                event["payload"]["speaker"]
+                for event in snapshot["events"]
+                if event["event_type"] == "speech"
+            ]
+            self.assertEqual(["alice", "bob", "carol"], speakers)
+        finally:
+            store.close()
+
     def test_player_page_contains_action_submission_contract(self):
         html = PLAYER_HTML.read_text(encoding="utf-8")
         for marker in (
@@ -309,6 +357,19 @@ class WerewolfWebTests(unittest.TestCase):
             "/actions",
             "Authorization",
             "can_act",
+            "actionNeedsTarget",
+            "请选择目标",
+            "救人目标由系统锁定",
+            "const nightVictim",
+            "target.innerHTML = saveTargetLocked",
+            "target.value = nightVictim",
+            "speech-field",
+            "speechField.hidden",
+            "previousTarget",
+            "actionContext",
+            "selectedTarget",
+            '$("target").addEventListener("change"',
+            "已选择目标：",
             "提交行动",
         ):
             self.assertIn(marker, html)
