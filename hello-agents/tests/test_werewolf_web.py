@@ -1,5 +1,7 @@
 import json
+import os
 import sys
+import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 import threading
@@ -141,3 +143,25 @@ class WerewolfWebTests(unittest.TestCase):
             "setInterval",
         ):
             self.assertIn(marker, html)
+
+    def test_web_module_starts_local_server(self):
+        environment = dict(os.environ)
+        process = subprocess.Popen(
+            [sys.executable, "-m", "werewolf_arena.web", "--port", "0", "--step-interval", "60"],
+            cwd=PROJECT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        try:
+            line = process.stdout.readline().strip()
+            self.assertIn("http://127.0.0.1:", line)
+            self.assertIn("/", line)
+        finally:
+            process.terminate()
+            process.wait(timeout=2)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()

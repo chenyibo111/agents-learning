@@ -20,6 +20,13 @@
 .\.venv\Scripts\python.exe hello-agents\projects\16-graduation-project\main.py --resume .tmp\werewolf\checkpoint.json --max-rounds 3 --json
 ```
 
+启动本地 Web 上帝视角审计台（默认仅绑定 `127.0.0.1`）：
+
+```bash
+cd hello-agents/projects/16-graduation-project
+python -m werewolf_arena.web --port 8765 --seed 7
+```
+
 默认是六个离线规则 Agent，不联网。`--output-dir` 生成：
 
 - `checkpoint.json`：完整、版本化的引擎状态；
@@ -54,6 +61,25 @@
 - `evaluation.py`：规则拒绝、发言、投票、隐私泄露和模型成本指标。
 - `narrative.py` / `spectator.py`：公开事件叙事和不含身份的静态剧场观战页。
 - `god_view.py`：仅供开发/裁判使用的完整状态时间线和规则诊断页。
+- `web.py` / `web.html`：本地单房间 Web 服务和时间线审计台；自动使用 RulePolicy 推进，不提供玩家 Action 注入。
+
+## Web 垂直切片
+
+当前已提供一条用于开发验证和裁判回放的 Web 闭环：
+
+1. 打开 `http://127.0.0.1:8765/`，创建指定 seed 的单房间；
+2. 点击“开始自动回放”，服务端后台按阶段运行 RulePolicy；
+3. 页面每 500ms 轮询裁判 API，展示完整事件时间线、选中事件 payload、GameState 快照和指标；
+4. 页面只读，完整身份和私有事件仅通过本地审计 API 暴露，不代表普通玩家权限。
+
+主要接口：
+
+- `POST /api/rooms`：创建单房间；
+- `POST /api/rooms/{game_id}/start`：启动自动回放；
+- `GET /api/rooms/{game_id}/audit?after=N`：读取完整裁判视图和增量事件；
+- `GET /api/rooms/{game_id}/public?after=N`：读取过滤后的公开事件边界。
+
+该切片使用 Python 标准库 HTTP 服务、内存状态和短轮询，暂不包含认证、数据库、多房间、SSE/WebSocket、真实 LLM 或人类玩家。
 
 ## 真实模型模式
 
@@ -114,10 +140,11 @@ python -m http.server 8766 --directory hello-agents\projects\16-graduation-proje
 
 ## 限制与下一步
 
-当前版本是单进程、回合制核心，提供普通观众 `spectator.html`、开发/裁判 `god_view.html` 和终端 `--spectate` 观战，但还不是完整 Web 服务。白天仍是每人一轮发言，默认规则 Policy 仅用于稳定回归，并不代表高水平游戏策略。发言依赖前序公开事件，因此讨论阶段保持串行；投票虽然独立提交，但在全员完成前不会公开票型。后续可在保持同一阶段语义的前提下增加多轮讨论、WebSocket/API、房间、认证、数据库、人类玩家、Prompt 版本实验、Elo/胜率评测和可视化回放。
+当前版本是单进程、回合制核心，已提供静态观战页、开发/裁判 `god_view.html` 和本地 Web 时间线审计台，但还不是面向用户发布的完整 Web 产品。白天仍是每人一轮发言，默认规则 Policy 仅用于稳定回归，并不代表高水平游戏策略。发言依赖前序公开事件，因此讨论阶段保持串行；投票虽然独立提交，但在全员完成前不会公开票型。后续可在保持同一阶段语义的前提下增加多轮讨论、SSE/WebSocket、持久化房间、认证、数据库、人类玩家、Prompt 版本实验、Elo/胜率评测和公开玩家页面。
 
 测试：
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest hello-agents\tests\test_werewolf_arena.py -v
+.\.venv\Scripts\python.exe -m unittest hello-agents\tests\test_werewolf_web.py -v
 ```

@@ -34,6 +34,26 @@ GameEngine.run()
           └─ evaluate_game + ArtifactStore：写 report.json、events.jsonl、spectator.html；`--god-view` 时额外写 god_view.html
 ```
 
+## Web 时间线审计流
+
+```text
+浏览器 web.html
+  │ POST /api/rooms
+  ▼
+RoomStore：创建唯一内存 Room + initial_game(seed)
+  │ POST /api/rooms/{id}/start
+  ▼
+后台 worker
+  └─ GameEngine.step()
+       └─ observation_for → RulePolicy → submit_action → advance_phase
+  ▼
+Room 快照：完整 GameState + 稳定事件游标
+  ▲
+  └─ GET /api/rooms/{id}/audit?after=N（每 500ms 增量轮询）
+```
+
+Web 第一条垂直切片只绑定 `127.0.0.1`，自动使用离线 `RulePolicy`，页面是开发/裁判审计台，不接受浏览器提交的 `Action`，也不在进程重启后承诺恢复。`/public` API 使用显式字段白名单和 `event.public` 过滤，保留普通观战页的权限边界。
+
 最重要的边界是：`Policy` 只能读取 `PlayerObservation`，只有 `rules.py` 能改变 `GameState`。因此模型不能自报身份、伪造查验结果或直接宣布胜利。
 
 ## 文件职责与阅读顺序
@@ -48,7 +68,8 @@ GameEngine.run()
 | 6 | `storage.py` | 原子写入完整状态、JSONL 轨迹和报告。 |
 | 7 | `evaluation.py` | 汇总胜负、事件数、违规数、隐私与成本指标。 |
 | 8 | `main.py` | 将命令行参数和以上模块组装为可运行程序。 |
-| 9 | `test_werewolf_arena.py` | 用具体场景验证规则和恢复不会回归。 |
+| 9 | `web.py` / `web.html` | 本地单房间 worker、裁判/公开 API 和时间线审计台。 |
+| 10 | `test_werewolf_arena.py` / `test_werewolf_web.py` | 用具体场景验证规则、恢复、Web API 和页面契约不会回归。 |
 
 ## 新建对局与恢复对局
 
