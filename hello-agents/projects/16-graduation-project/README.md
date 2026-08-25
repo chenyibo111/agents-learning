@@ -59,6 +59,8 @@
 
 设置以下环境变量后使用 `--policy llm`：
 
+真实模型入口会自动加载仓库根目录和 `hello-agents/.env`；已经在 shell 中显式设置的环境变量优先，不会被 `.env` 覆盖。
+
 ```powershell
 $env:WEREWOLF_LLM_ENDPOINT = "https://your-provider.example/v1/chat/completions"
 $env:WEREWOLF_LLM_API_KEY = "your-secret"
@@ -67,6 +69,8 @@ $env:WEREWOLF_LLM_TIMEOUT_SECONDS = "30"
 $env:WEREWOLF_LLM_MAX_RETRIES = "1"
 $env:WEREWOLF_LLM_RETRY_BACKOFF_SECONDS = "0.5"
 $env:WEREWOLF_LLM_MAX_OUTPUT_TOKENS = "2048"
+$env:WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT = "4096"
+$env:WEREWOLF_LLM_MAX_OUTPUT_RETRIES = "1"
 $env:WEREWOLF_LLM_THINKING = "disabled" # auto / enabled / disabled
 $env:WEREWOLF_LLM_INPUT_PRICE_PER_MILLION = "0"
 $env:WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION = "0"
@@ -75,7 +79,7 @@ $env:WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION = "0"
 
 六名玩家会使用独立的 Policy 上下文，但共享同一个可配置模型适配器。模型必须返回 JSON：`action_type`、`target_id`、`speech`、`decision_label`。Prompt 会按阶段声明允许的行动，Policy 会将常见别名（如 `kill`、`speech`）归一化，并在规则层之前执行核心字段、长度、阶段、投票目标和夜间目标语义 Schema 校验；`decision_label` 只是可选辅助元数据，缺失、`null` 或非字符串会归一化为空字符串。投票必须指向存活且不是自己的玩家；弃票或 `noop` 不得携带目标。格式或核心 Schema 失败时最多追加一次短修复请求，仍失败才使用安全 `noop`；规则引擎仍保留对所有合法性条件的最终拒绝防线；密钥不会写进 checkpoint、事件或报告。
 
-LLM 适配器默认关闭 thinking，并将结构化行动输出上限设为 2048；`WEREWOLF_LLM_THINKING=auto` 会省略供应商专属字段，`enabled` 可恢复思考模式。适配器对超时、网络错误、HTTP 408/425/429 和 5xx 做有限重试；401/其他 4xx 不重试。重试耗尽后返回安全的 `noop`，并在 `decision_label`、`model_failures` 和 stderr 进度日志中保留非敏感失败原因，整局不会因为单个模型请求超时而崩溃。`max_tokens` 限制模型输出上限，价格环境变量按百万 Token 计算 `cost_usd`。`--progress` 只输出请求阶段、尝试次数、错误码和耗时，不输出 Prompt、响应或 API Key。
+LLM 适配器默认关闭 thinking，并将结构化行动初始输出上限设为 2048；当供应商返回 `finish_reason=length` 时，最多按 `WEREWOLF_LLM_MAX_OUTPUT_RETRIES` 次将预算升档，最高不超过 `WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT`（默认 4096），仍截断才安全降级。`WEREWOLF_LLM_THINKING=auto` 会省略供应商专属字段，`enabled` 可恢复思考模式。适配器对超时、网络错误、HTTP 408/425/429 和 5xx 做有限重试；401/其他 4xx 不重试。重试耗尽后返回安全的 `noop`，并在 `decision_label`、`model_failures` 和 stderr 进度日志中保留非敏感失败原因，整局不会因为单个模型请求超时而崩溃。`max_tokens` 限制模型输出上限，价格环境变量按百万 Token 计算 `cost_usd`。`--progress` 只输出请求阶段、尝试次数、错误码、截断原因和耗时，不输出 Prompt、响应或 API Key。
 
 LLM 模式还会为每个 Agent 的每次逻辑请求追加一条脱敏记录，包含 `agent_id`、`phase`、`request_status`、`decision_status`、耗时、Token、解析后的行动类型、降级原因和 hash。完整请求/响应不会落盘。
 

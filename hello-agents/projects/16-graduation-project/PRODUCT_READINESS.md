@@ -28,7 +28,7 @@
 - [x] Action 和 Event 分离：Agent 只提出行动，规则引擎才改变状态。
 - [x] 默认 `RulePolicy` 可在不调用 LLM 的情况下完整运行游戏。
 - [x] `ScriptedModelAdapter` 可用于离线测试模型输出和失败分支。
-- [~] `LLMPolicy` 与 OpenAI Chat Completions 兼容适配器已实现阶段行动协议、常见别名归一化、本地 Schema 与目标语义校验、默认关闭 thinking、一次格式修复重试、有限重试、失败 `noop` 降级、输出上限、Token 价格和非敏感进度事件；真实端点仍需多局 smoke test 验证输出截断率、延迟和 Seed 18 修复效果。
+- [~] `LLMPolicy` 与 OpenAI Chat Completions 兼容适配器已实现阶段行动协议、常见别名归一化、本地 Schema 与目标语义校验、默认关闭 thinking、一次格式修复重试、输出截断识别与预算升档、有限重试、失败 `noop` 降级、输出上限、Token 价格和非敏感进度事件；真实端点已完成 5 个 seed 的截断率和延迟验证，但 `.env` 尚未提供 Token 单价，成本指标仍待补齐。
 
 ## 已实现：可运维性与质量基础
 

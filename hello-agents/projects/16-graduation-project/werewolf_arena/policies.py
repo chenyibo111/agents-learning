@@ -1,15 +1,21 @@
 """离线规则 Agent 与可替换模型 Policy。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import hashlib
 import os
+from pathlib import Path
 import socket
 import time
 from typing import Any, Callable, Protocol
 from urllib import error as urlerror
 from urllib import request
 from uuid import uuid4
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - python-dotenv is a declared project dependency
+    load_dotenv = None
 
 from .schemas import Action, Phase, PlayerObservation, Role
 from .visibility import model_prompts
@@ -71,6 +77,10 @@ class ModelResponse:
     attempts: int = 1
     retry_count: int = 0
     failure_reason: str = ""
+    finish_reason: str = ""
+    truncated: bool = False
+    requested_max_tokens: int = 0
+    output_retry_count: int = 0
 
 
 class ModelAdapter(Protocol):
@@ -111,6 +121,8 @@ class OpenAICompatibleModelAdapter:
         input_price_per_million: float = 0.0,
         output_price_per_million: float = 0.0,
         max_output_tokens: int = 2048,
+        max_output_tokens_limit: int = 4096,
+        max_output_retries: int = 1,
         thinking: str = "disabled",
     ):
         """保存显式配置；缺失任一项时拒绝启动且不回显 secret。"""
@@ -126,6 +138,10 @@ class OpenAICompatibleModelAdapter:
             raise LLMConfigurationError("模型 Token 价格不能小于 0")
         if max_output_tokens <= 0:
             raise LLMConfigurationError("WEREWOLF_LLM_MAX_OUTPUT_TOKENS 必须大于 0")
+        if max_output_tokens_limit < max_output_tokens:
+            raise LLMConfigurationError("WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT 不能小于初始输出上限")
+        if max_output_retries < 0:
+            raise LLMConfigurationError("WEREWOLF_LLM_MAX_OUTPUT_RETRIES 不能小于 0")
         if thinking not in {"auto", "enabled", "disabled"}:
             raise LLMConfigurationError("WEREWOLF_LLM_THINKING 必须是 auto、enabled 或 disabled")
         self.endpoint = endpoint
@@ -138,11 +154,15 @@ class OpenAICompatibleModelAdapter:
         self.input_price_per_million = input_price_per_million
         self.output_price_per_million = output_price_per_million
         self.max_output_tokens = max_output_tokens
+        self.max_output_tokens_limit = max_output_tokens_limit
+        self.max_output_retries = max_output_retries
         self.thinking = thinking
 
     @classmethod
     def from_environment(cls, *, on_event: ProgressCallback | None = None) -> "OpenAICompatibleModelAdapter":
         """只从环境读取模型配置，避免把 endpoint 或 API key 写入代码和记录。"""
+        _load_project_dotenv()
+        max_output_tokens = _environment_int("WEREWOLF_LLM_MAX_OUTPUT_TOKENS", 2048)
         return cls(
             endpoint=os.environ.get("WEREWOLF_LLM_ENDPOINT", ""),
             api_key=os.environ.get("WEREWOLF_LLM_API_KEY", ""),
@@ -153,17 +173,45 @@ class OpenAICompatibleModelAdapter:
             on_event=on_event,
             input_price_per_million=_environment_float("WEREWOLF_LLM_INPUT_PRICE_PER_MILLION", 0.0),
             output_price_per_million=_environment_float("WEREWOLF_LLM_OUTPUT_PRICE_PER_MILLION", 0.0),
-            max_output_tokens=_environment_int("WEREWOLF_LLM_MAX_OUTPUT_TOKENS", 2048),
+            max_output_tokens=max_output_tokens,
+            max_output_tokens_limit=_environment_int(
+                "WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT", max(4096, max_output_tokens)
+            ),
+            max_output_retries=_environment_int("WEREWOLF_LLM_MAX_OUTPUT_RETRIES", 1),
             thinking=os.environ.get("WEREWOLF_LLM_THINKING", "disabled").strip().lower(),
         )
 
     def complete(self, system_prompt: str, user_prompt: str) -> ModelResponse:
-        """按 OpenAI Chat Completions 兼容格式请求 JSON，并提取用量指标。"""
+        """请求结构化 JSON；输出被截断时逐步提高预算并保留审计指标。"""
+        aggregate: ModelResponse | None = None
+        budget = self.max_output_tokens
+        for output_retry in range(self.max_output_retries + 1):
+            response = self._complete_with_budget(system_prompt, user_prompt, budget)
+            response = replace(response, output_retry_count=output_retry)
+            aggregate = response if aggregate is None else _combine_model_responses(aggregate, response)
+            if not response.truncated:
+                return aggregate
+            next_budget = min(self.max_output_tokens_limit, max(budget * 2, budget + 1))
+            if next_budget <= budget:
+                return aggregate
+            self._emit(
+                {
+                    "event": "request_retrying",
+                    "attempt": output_retry + 1,
+                    "reason": "output_truncated",
+                    "next_max_tokens": next_budget,
+                }
+            )
+            budget = next_budget
+        return aggregate or ModelResponse(text="", failure_reason="adapter_error")
+
+    def _complete_with_budget(self, system_prompt: str, user_prompt: str, max_output_tokens: int) -> ModelResponse:
+        """使用一个输出预算执行网络重试；调用方负责截断后的预算升档。"""
         # response_format 要求服务端产出对象；本地 LLMPolicy 仍会二次解析并兜底。
         request_payload = {
             "model": self.model,
             "temperature": 0.2,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": max_output_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -184,30 +232,61 @@ class OpenAICompatibleModelAdapter:
         started_at = time.monotonic()
         total_attempts = self.max_retries + 1
         for attempt in range(1, total_attempts + 1):
-            self._emit({"event": "request_started", "attempt": attempt})
+            self._emit({"event": "request_started", "attempt": attempt, "max_output_tokens": max_output_tokens})
             try:
                 with request.urlopen(http_request, timeout=self.timeout_seconds) as response:  # noqa: S310 - endpoint is explicit user configuration
                     value = json.loads(response.read().decode("utf-8"))
                 # 兼容部分供应商返回的多段 content 数组与常见的单字符串 content。
-                content = value["choices"][0]["message"]["content"]
+                choice = value["choices"][0]
+                content = choice["message"]["content"]
                 if isinstance(content, list):
                     content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
+                finish_reason = str(choice.get("finish_reason") or "")
                 usage = value.get("usage", {})
                 latency_ms = _elapsed_ms(started_at)
+                input_tokens = int(usage.get("prompt_tokens", 0))
+                output_tokens = int(usage.get("completion_tokens", 0))
+                cost_usd = _calculate_cost(
+                    input_tokens,
+                    output_tokens,
+                    self.input_price_per_million,
+                    self.output_price_per_million,
+                )
+                if finish_reason in {"length", "max_tokens"}:
+                    self._emit(
+                        {
+                            "event": "request_truncated",
+                            "attempt": attempt,
+                            "latency_ms": latency_ms,
+                            "finish_reason": finish_reason,
+                            "output_tokens": output_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    )
+                    return ModelResponse(
+                        text=str(content),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                        latency_ms=latency_ms,
+                        attempts=attempt,
+                        retry_count=attempt - 1,
+                        failure_reason="output_truncated",
+                        finish_reason=finish_reason,
+                        truncated=True,
+                        requested_max_tokens=max_output_tokens,
+                    )
                 self._emit({"event": "request_succeeded", "attempt": attempt, "latency_ms": latency_ms})
                 return ModelResponse(
                     text=str(content),
-                    input_tokens=int(usage.get("prompt_tokens", 0)),
-                    output_tokens=int(usage.get("completion_tokens", 0)),
-                    cost_usd=_calculate_cost(
-                        int(usage.get("prompt_tokens", 0)),
-                        int(usage.get("completion_tokens", 0)),
-                        self.input_price_per_million,
-                        self.output_price_per_million,
-                    ),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
                     latency_ms=latency_ms,
                     attempts=attempt,
                     retry_count=attempt - 1,
+                    finish_reason=finish_reason,
+                    requested_max_tokens=max_output_tokens,
                 )
             except (TimeoutError, socket.timeout, urlerror.HTTPError, urlerror.URLError, OSError) as error:
                 reason = _failure_reason(error)
@@ -226,6 +305,7 @@ class OpenAICompatibleModelAdapter:
                     attempts=attempt,
                     retry_count=attempt - 1,
                     failure_reason=reason,
+                    requested_max_tokens=max_output_tokens,
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 # Provider 返回格式错误不是网络瞬时错误；重试没有确定收益，直接安全降级。
@@ -237,6 +317,7 @@ class OpenAICompatibleModelAdapter:
                     attempts=attempt,
                     retry_count=attempt - 1,
                     failure_reason="invalid_provider_response",
+                    requested_max_tokens=max_output_tokens,
                 )
 
     def _emit(self, event: dict[str, Any]) -> None:
@@ -400,6 +481,10 @@ class LLMPolicy:
             "latency_ms": response.latency_ms,
             "prompt_sha256": prompt_sha256,
             "response_sha256": _sha256_text(response.text) if response.text else None,
+            "finish_reason": response.finish_reason or None,
+            "truncated": response.truncated,
+            "requested_max_tokens": response.requested_max_tokens or None,
+            "output_retry_count": response.output_retry_count,
             "repair_attempted": repair_attempted,
             "repair_reason": repair_reason or None,
             "repair_succeeded": repair_succeeded,
@@ -472,6 +557,10 @@ def _combine_model_responses(first: ModelResponse, second: ModelResponse) -> Mod
         attempts=first.attempts + second.attempts,
         retry_count=first.retry_count + second.retry_count,
         failure_reason=second.failure_reason,
+        finish_reason=second.finish_reason or first.finish_reason,
+        truncated=second.truncated,
+        requested_max_tokens=max(first.requested_max_tokens, second.requested_max_tokens),
+        output_retry_count=max(first.output_retry_count, second.output_retry_count),
     )
 
 
@@ -611,6 +700,15 @@ class RulePolicy:
                 target = next((player for player in alive if player != self.player_id), None)
             return Action(self.player_id, "vote" if target else "abstain", target, decision_label="deterministic_vote")
         return Action(self.player_id, "noop")
+
+
+def _load_project_dotenv() -> None:
+    """加载仓库级和 hello-agents 级 .env，但不覆盖已显式导出的环境变量。"""
+    if load_dotenv is None:
+        return
+    hello_agents_root = Path(__file__).resolve().parents[3]
+    load_dotenv(hello_agents_root.parent / ".env")
+    load_dotenv(hello_agents_root / ".env")
 
 
 def _environment_int(name: str, default: int) -> int:

@@ -139,3 +139,17 @@
 - 关联问题：`I-012`。
 - 处理：`--spectate` 非 JSON 模式不再打印完整 payload；`--json --spectate` 保持 stdout 为合法 JSON。观战时间线直接绑定源公开事件，避免过滤私有事件后轮次/阶段错位。
 - 验证：观战隐私、JSON stdout 和源事件轮次/阶段回归测试通过。
+
+## F-020｜结构化输出截断识别与预算升档
+
+- 日期：2026-08-25
+- 关联问题：`I-007`。
+- 处理：读取兼容网关的 `finish_reason`，将 `length/max_tokens` 分类为 `output_truncated`；截断时按 2 倍预算重试，受 `WEREWOLF_LLM_MAX_OUTPUT_TOKENS_LIMIT` 和 `WEREWOLF_LLM_MAX_OUTPUT_RETRIES` 硬限制；请求追踪增加 `finish_reason`、`truncated`、最终预算和输出预算重试次数。
+- 验证：新增截断升档、硬上限降级和追踪元数据测试；第 16 课专项测试通过。真实网关 Seed 7/18/23/31/42 共 136 次请求，0 次截断、0 次降级、平均延迟 1295ms、P95 2227ms、最大 3344ms；价格配置缺失导致成本暂为 0。
+
+## F-021｜狼人杀入口自动加载 dotenv
+
+- 日期：2026-08-25
+- 关联问题：真实模型验证配置未自动进入狼人杀适配器。
+- 处理：`OpenAICompatibleModelAdapter.from_environment()` 自动加载仓库根目录和 `hello-agents/.env`，不覆盖已经显式导出的环境变量。
+- 验证：新增 dotenv 加载测试；Seed 18 及 Seed 7/23/31/42 真实运行均成功读取配置并完成对局。

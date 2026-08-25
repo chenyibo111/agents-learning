@@ -887,6 +887,93 @@ class WerewolfArenaTests(unittest.TestCase):
         self.assertEqual(128, payload["max_tokens"])
         self.assertAlmostEqual(0.002, result.cost_usd)
 
+    def test_model_adapter_escalates_budget_after_truncated_json(self):
+        """模型以 finish_reason=length 截断时，应升档预算重试而不是直接降级。"""
+        truncated = FakeHTTPResponse(
+            {
+                "choices": [{"finish_reason": "length", "message": {"content": '{"action_type":"'}}],
+                "usage": {"completion_tokens": 64},
+            }
+        )
+        complete = FakeHTTPResponse(
+            {
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"action_type":"noop"}'}}],
+                "usage": {"completion_tokens": 8},
+            }
+        )
+        adapter = OpenAICompatibleModelAdapter(
+            endpoint="https://example.invalid/v1/chat/completions",
+            api_key="test-secret",
+            model="test-model",
+            max_output_tokens=64,
+            max_output_tokens_limit=128,
+            max_output_retries=1,
+        )
+        with patch("werewolf_arena.policies.request.urlopen", side_effect=[truncated, complete]) as urlopen:
+            result = adapter.complete("system", "user")
+
+        payloads = [json.loads(call.args[0].data.decode("utf-8")) for call in urlopen.call_args_list]
+        self.assertEqual([64, 128], [payload["max_tokens"] for payload in payloads])
+        self.assertEqual('{"action_type":"noop"}', result.text)
+        self.assertFalse(result.truncated)
+        self.assertEqual("stop", result.finish_reason)
+        self.assertEqual(128, result.requested_max_tokens)
+        self.assertEqual(1, result.output_retry_count)
+
+    def test_model_adapter_stops_at_output_budget_limit_after_repeated_truncation(self):
+        """连续截断时应停在硬上限并返回可观测的 output_truncated。"""
+        truncated = FakeHTTPResponse(
+            {
+                "choices": [{"finish_reason": "length", "message": {"content": "{"}}],
+                "usage": {"completion_tokens": 64},
+            }
+        )
+        adapter = OpenAICompatibleModelAdapter(
+            endpoint="https://example.invalid/v1/chat/completions",
+            api_key="test-secret",
+            model="test-model",
+            max_output_tokens=64,
+            max_output_tokens_limit=128,
+            max_output_retries=3,
+        )
+        with patch("werewolf_arena.policies.request.urlopen", side_effect=[truncated, truncated]) as urlopen:
+            result = adapter.complete("system", "user")
+
+        self.assertEqual(2, urlopen.call_count)
+        self.assertTrue(result.truncated)
+        self.assertEqual("output_truncated", result.failure_reason)
+        self.assertEqual("length", result.finish_reason)
+        self.assertEqual(128, result.requested_max_tokens)
+        self.assertEqual(1, result.output_retry_count)
+
+    def test_llm_trace_records_output_truncation_metadata(self):
+        """请求追踪必须区分输出截断和普通模型失败。"""
+        state = initial_game(seed=7)
+        actor = player_id(state, Role.SEER)
+        records = []
+
+        class TruncatedAdapter:
+            def complete(self, system_prompt, user_prompt):
+                return ModelResponse(
+                    text='{"action_type":"',
+                    output_tokens=64,
+                    failure_reason="output_truncated",
+                    finish_reason="length",
+                    truncated=True,
+                    requested_max_tokens=64,
+                )
+
+        action = LLMPolicy(actor, TruncatedAdapter(), on_request=records.append).decide(
+            observation_for(state, actor)
+        )
+
+        self.assertEqual("noop", action.action_type)
+        self.assertEqual(1, len(records))
+        self.assertEqual("output_truncated", records[0]["failure_reason"])
+        self.assertEqual("length", records[0]["finish_reason"])
+        self.assertTrue(records[0]["truncated"])
+        self.assertEqual(64, records[0]["requested_max_tokens"])
+
     def test_model_adapter_controls_thinking_mode_for_structured_actions(self):
         """结构化行动默认关闭 thinking，也允许 auto 模式省略供应商专属字段。"""
         response = FakeHTTPResponse(
@@ -927,7 +1014,24 @@ class WerewolfArenaTests(unittest.TestCase):
             adapter = OpenAICompatibleModelAdapter.from_environment()
 
         self.assertEqual(2048, adapter.max_output_tokens)
+        self.assertEqual(4096, adapter.max_output_tokens_limit)
+        self.assertEqual(1, adapter.max_output_retries)
         self.assertEqual("disabled", adapter.thinking)
+
+    def test_llm_adapter_loads_project_dotenv_before_reading_configuration(self):
+        """狼人杀真实模型入口应自动加载项目 .env，而不是要求手动 export。"""
+        with patch.dict(
+            os.environ,
+            {
+                "WEREWOLF_LLM_ENDPOINT": "https://example.invalid/v1/chat/completions",
+                "WEREWOLF_LLM_API_KEY": "test-secret",
+                "WEREWOLF_LLM_MODEL": "test-model",
+            },
+            clear=True,
+        ), patch("werewolf_arena.policies.load_dotenv") as load_dotenv:
+            OpenAICompatibleModelAdapter.from_environment()
+
+        self.assertIn(PROJECT.parents[1] / ".env", {call.args[0] for call in load_dotenv.call_args_list})
 
     def test_llm_policy_rejects_vote_without_target_before_rules(self):
         """vote 没有目标时应在 Policy 层降级，不进入规则层制造拒绝事件。"""
