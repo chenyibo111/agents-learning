@@ -9,3 +9,4 @@ __pycache__/
 **/projects/*/session*.json
 **/projects/*/workflow-state.json
 **/projects/*/vector_store/
+hello-agents/projects/16-graduation-project/runs/

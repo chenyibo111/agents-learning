@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -10,13 +11,19 @@ ROOT = Path(__file__).resolve().parents[1]
 class ProjectRuntimeTests(unittest.TestCase):
     def test_every_project_runs_offline_demo(self):
         for main_file in sorted((ROOT / "projects").glob("[0-9][0-9]-*/main.py")):
-            completed = subprocess.run(
-                [sys.executable, str(main_file), "--demo"],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            # 第 16 课默认会把真实对局记录写入项目 runs/；通用冒烟测试改用临时目录，
+            # 既验证入口，也不污染源码目录或依赖受限沙箱对子目录的写权限。
+            with tempfile.TemporaryDirectory() as artifact_directory:
+                command = [sys.executable, str(main_file), "--demo"]
+                if main_file.parent.name == "16-graduation-project":
+                    command.extend(["--output-dir", artifact_directory])
+                completed = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
             self.assertEqual(completed.returncode, 0, f"{main_file}: {completed.stderr}")
             self.assertTrue(completed.stdout.strip(), main_file)
 
