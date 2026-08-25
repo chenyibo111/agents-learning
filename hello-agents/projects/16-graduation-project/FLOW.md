@@ -56,6 +56,28 @@ Web 垂直切片只绑定 `127.0.0.1`，按启动参数选择离线 `RulePolicy`
 
 真实 LLM 房间会为六名玩家创建独立 Policy，共享一个模型适配器；每次逻辑决策通过 `RequestTraceCollector` 生成脱敏摘要，使用独立 `request_cursor` 增量返回并同步写入房间目录的 `llm_requests.jsonl`。页面只渲染 Agent、阶段、请求/决策状态、耗时、Token、费用、截断和降级原因，不渲染 Prompt、原始响应、endpoint 或密钥。
 
+## 玩家 Web 垂直切片
+
+```text
+player.html
+  │ POST /api/rooms
+  │ POST /api/rooms/{id}/sessions {player_id}
+  ▼
+Room：绑定一个临时本地玩家令牌 + HumanPolicy
+  │ POST /api/rooms/{id}/start
+  ▼
+后台 worker
+  ├─ 其他座位：RulePolicy / LLMPolicy 自动决策
+  └─ 玩家座位：HumanPolicy 等待浏览器 Action
+       ▲                    │
+       └─ POST /actions ◄───┘
+  │ GET /api/rooms/{id}/player?after=N
+  ▼
+只返回该玩家的角色、资源、授权私有事件、公开事件和当前允许 Action
+```
+
+玩家 Action 进入同一个 `rules._validate_action()` 和 `submit_action()` 路径，不允许客户端直接改变 GameState。当前令牌只用于本地开发试玩，任何人都可以在本地选择座位；生产环境仍需补充登录、房间授权和角色会话绑定。
+
 最重要的边界是：`Policy` 只能读取 `PlayerObservation`，只有 `rules.py` 能改变 `GameState`。因此模型不能自报身份、伪造查验结果或直接宣布胜利。
 
 ## 文件职责与阅读顺序

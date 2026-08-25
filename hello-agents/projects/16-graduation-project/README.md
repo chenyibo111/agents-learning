@@ -35,6 +35,8 @@ python -m werewolf_arena.web --policy llm --port 8767 --seed 7 --max-rounds 4 --
 
 启动后访问 `http://127.0.0.1:8767/`，页面右上角显示 `REAL LLM`、模型名和价格配置状态。
 
+启动本地玩家试玩页访问 `http://127.0.0.1:8767/player`：创建房间、选择一个座位、加入后点击“开始游戏”，其余五个座位由当前 `--policy` 接管。
+
 默认是六个离线规则 Agent，不联网。`--output-dir` 生成：
 
 - `checkpoint.json`：完整、版本化的引擎状态；
@@ -69,7 +71,8 @@ python -m werewolf_arena.web --policy llm --port 8767 --seed 7 --max-rounds 4 --
 - `evaluation.py`：规则拒绝、发言、投票、隐私泄露和模型成本指标。
 - `narrative.py` / `spectator.py`：公开事件叙事和不含身份的静态剧场观战页。
 - `god_view.py`：仅供开发/裁判使用的完整状态时间线和规则诊断页。
-- `web.py` / `web.html`：本地单房间 Web 服务和时间线审计台；按 `--policy` 选择 RulePolicy 或真实 LLM，不提供玩家 Action 注入。
+- `web.py` / `web.html`：本地单房间 Web 服务、上帝视角时间线审计台和裁判 API。
+- `player.html`：本地开发玩家页；使用临时座位会话提交自己的 Action，不读取完整 GameState。
 
 ## Web 垂直切片
 
@@ -80,14 +83,24 @@ python -m werewolf_arena.web --policy llm --port 8767 --seed 7 --max-rounds 4 --
 3. 页面每 500ms 轮询裁判 API，使用事件游标和请求游标展示完整事件时间线、选中事件 payload、GameState 快照、指标和脱敏 LLM 请求流；
 4. 页面只读，完整身份和私有事件仅通过本地审计 API 暴露，不代表普通玩家权限。
 
+玩家试玩闭环：
+
+1. 打开 `http://127.0.0.1:8767/player`；
+2. 创建房间并选择一个座位，点击“加入座位”；
+3. 点击“开始游戏”，页面只在轮到该座位时显示允许的 Action；
+4. 提交发言、狼人确认、查验、用药或投票，服务端通过同一规则引擎校验后继续推进。
+
 主要接口：
 
 - `POST /api/rooms`：创建单房间；
 - `POST /api/rooms/{game_id}/start`：启动自动回放；
 - `GET /api/rooms/{game_id}/audit?after=N&request_after=M`：读取完整裁判视图、事件增量和 LLM 请求增量；
-- `GET /api/rooms/{game_id}/public?after=N`：读取过滤后的公开事件边界。
+- `GET /api/rooms/{game_id}/public?after=N`：读取过滤后的公开事件边界；
+- `POST /api/rooms/{game_id}/sessions`：创建一个本地开发座位会话；
+- `GET /api/rooms/{game_id}/player?after=N`：读取当前玩家的授权状态和事件；
+- `POST /api/rooms/{game_id}/actions`：提交当前玩家 Action，需要 `Authorization: Bearer <token>`。
 
-该切片使用 Python 标准库 HTTP 服务、内存状态和短轮询；真实 LLM 模式只在显式传入 `--policy llm` 时启用，并自动把每个房间的审计工件写入 `runs/`。仍暂不包含认证、数据库、多房间、SSE/WebSocket 或人类玩家。
+该切片使用 Python 标准库 HTTP 服务、内存状态和短轮询；真实 LLM 模式只在显式传入 `--policy llm` 时启用，并自动把每个房间的审计工件写入 `runs/`。玩家会话是本地开发用临时内存令牌，当前不提供真实登录、身份校验或多房间隔离；仍暂不包含数据库、SSE/WebSocket 和生产级权限系统。
 
 ## 真实模型模式
 
@@ -159,4 +172,4 @@ python -m http.server 8766 --directory hello-agents\projects\16-graduation-proje
 .\.venv\Scripts\python.exe -m unittest hello-agents\tests\test_werewolf_web.py -v
 ```
 
-当前回归证据：狼人杀核心 72/72、Web 16/16、仓库全量 290/290（4 个与真实第三方框架相关的 smoke test 按配置跳过）。
+当前回归证据：狼人杀核心 72/72、Web 20/20、仓库全量 294/294（4 个与真实第三方框架相关的 smoke test 按配置跳过）。

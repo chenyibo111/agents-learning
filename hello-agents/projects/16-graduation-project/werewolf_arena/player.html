@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WEREWOLF ARENA · 玩家试玩</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0d14; --panel:#151a29; --panel2:#1c2438; --line:#303a58; --text:#eff2ff; --muted:#98a2bd; --accent:#8c9bff; --good:#67d4a4; --warn:#f0bb68; --danger:#f07d8a; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--text); background:radial-gradient(circle at 20% 0,#20264a 0,var(--bg) 42rem); font:14px/1.55 Inter,system-ui,-apple-system,sans-serif; }
+    button,input,select,textarea { font:inherit; }
+    button { cursor:pointer; border:1px solid #5363a1; border-radius:10px; padding:9px 14px; color:#fff; background:#2d3b70; }
+    button:hover { background:#3a4b87; } button:disabled { cursor:not-allowed; opacity:.45; }
+    input,select,textarea { width:100%; color:var(--text); background:#0e1220; border:1px solid var(--line); border-radius:9px; padding:9px 10px; }
+    textarea { min-height:96px; resize:vertical; }
+    .shell { max-width:1120px; margin:0 auto; padding:28px 20px 56px; }
+    header { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; margin-bottom:22px; }
+    .eyebrow { color:var(--accent); letter-spacing:.16em; font-size:11px; font-weight:800; }
+    h1 { margin:7px 0 9px; font-size:clamp(28px,5vw,48px); line-height:1.05; letter-spacing:-.04em; }
+    p { margin-top:0; } .subtitle,.muted { color:var(--muted); }
+    .badge { border:1px solid #344064; border-radius:999px; padding:7px 11px; color:#cbd3ff; white-space:nowrap; }
+    .grid { display:grid; grid-template-columns:minmax(280px,.85fr) minmax(360px,1.35fr); gap:16px; align-items:start; }
+    .panel { background:linear-gradient(145deg,rgba(28,36,56,.98),rgba(17,20,31,.98)); border:1px solid var(--line); border-radius:16px; padding:17px; }
+    .panel h2 { margin:0 0 13px; font-size:15px; } .panel + .panel { margin-top:16px; }
+    .toolbar { display:grid; grid-template-columns:100px 1fr auto; gap:10px; align-items:end; }
+    label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+    .status { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin:16px 0; }
+    .stat { background:#101421; border:1px solid #252d43; border-radius:11px; padding:10px; }
+    .stat small { display:block; color:var(--muted); } .stat strong { display:block; margin-top:3px; font-size:16px; }
+    .role { color:#d6ffe9; border-color:#2e765e; background:#143327; }
+    .action-box { border:1px solid #48568b; background:#171e35; border-radius:12px; padding:13px; }
+    .action-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+    .events { max-height:430px; overflow:auto; } .event { padding:10px 0; border-bottom:1px solid #252d43; }
+    .event:last-child { border-bottom:0; } .event strong { color:var(--accent); } .event small { color:var(--muted); }
+    .private { color:#ffd98f; } .error { display:none; color:#ffd6da; background:#3a1d2a; border:1px solid #774050; border-radius:10px; padding:10px 12px; margin-bottom:16px; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#0c101b; border:1px solid #252d43; border-radius:10px; padding:12px; color:#dbe0ff; font:12px/1.6 ui-monospace,monospace; max-height:250px; overflow:auto; }
+    .footer { color:var(--muted); font-size:12px; margin-top:17px; }
+    @media (max-width:720px) { header { display:block; } .badge { display:inline-block; margin-top:12px; } .grid { grid-template-columns:1fr; } .status { grid-template-columns:repeat(2,1fr); } .toolbar { grid-template-columns:1fr 1fr; } .toolbar button { grid-column:1 / -1; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div><div class="eyebrow">WEREWOLF ARENA / PLAYER CLIENT</div><h1>玩家试玩</h1><p class="subtitle">选择一个本地开发座位，与其余五名 RulePolicy 或真实 LLM 玩家完成一局。这里仅展示当前玩家被授权看到的信息。</p></div>
+      <div class="badge">本地开发试玩</div>
+    </header>
+    <div id="error" class="error" role="alert"></div>
+    <section class="panel">
+      <h2>加入一局</h2>
+      <div class="toolbar">
+        <div><label for="seed">Seed</label><input id="seed" type="number" value="7" step="1"></div>
+        <div><label for="seat">玩家座位</label><select id="seat" disabled><option>先创建房间</option></select></div>
+        <button id="create">创建房间</button>
+      </div>
+      <div class="toolbar" style="margin-top:10px;grid-template-columns:1fr auto">
+        <div id="room-meta" class="muted">尚未创建房间</div>
+        <button id="join" disabled>加入座位</button>
+        <button id="start" disabled>开始游戏</button>
+      </div>
+    </section>
+
+    <section class="status" aria-label="玩家状态">
+      <div class="stat"><small>我的座位</small><strong id="player-id">—</strong></div>
+      <div class="stat"><small>身份</small><strong id="role" class="role">—</strong></div>
+      <div class="stat"><small>阶段</small><strong id="phase">—</strong></div>
+      <div class="stat"><small>轮到谁</small><strong id="active">—</strong></div>
+    </section>
+
+    <section class="grid">
+      <article class="panel"><h2>当前行动</h2><div id="action-state" class="muted">加入座位后等待游戏开始。</div><div id="action-box" class="action-box" hidden><div class="action-row"><div><label for="action-type">行动类型</label><select id="action-type"></select></div><div><label for="target">目标</label><select id="target"><option value="">无需目标</option></select></div></div><label for="speech">发言 / 私聊内容</label><textarea id="speech" maxlength="240" placeholder="当前行动需要发言时填写"></textarea><button id="submit-action">提交行动</button></div></article>
+      <article class="panel"><h2>我能看到的事件</h2><div id="events" class="events"><p class="muted">等待事件…</p></div></article>
+      <article class="panel"><h2>我的私有信息</h2><pre id="private">等待玩家会话…</pre></article>
+    </section>
+    <p class="footer">玩家接口使用临时内存会话；完整身份、私有事件和上帝视角数据不会通过玩家接口返回。</p>
+  </main>
+  <script>
+    const state = { roomId:null, token:null, playerId:null, cursor:0, events:[], timer:null, canAct:false, last:null };
+    const $ = (id) => document.getElementById(id);
+    const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+    const pretty = (value) => JSON.stringify(value, null, 2);
+    const setError = (message = "") => { $("error").textContent = message; $("error").style.display = message ? "block" : "none"; };
+    async function request(path, options = {}) {
+      const headers = { "Content-Type":"application/json", ...(options.headers || {}) };
+      const response = await fetch(path, { ...options, headers });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+      return payload;
+    }
+    function authHeaders() { return state.token ? { Authorization: `Bearer ${state.token}` } : {}; }
+    function attachRoom(payload) {
+      state.roomId = payload.game_id; state.cursor = 0; state.events = [];
+      $("room-meta").textContent = `${payload.game_id} · seed ${payload.seed}`;
+      $("seat").innerHTML = payload.seats.map((seat) => `<option value="${escapeHtml(seat)}">${escapeHtml(seat)}</option>`).join("");
+      $("seat").disabled = false; $("join").disabled = false; setError("");
+    }
+    function renderAction(data) {
+      state.canAct = Boolean(data.can_act);
+      $("action-state").textContent = data.status !== "RUNNING" ? `本局已结束：${data.winner || data.status}` : data.can_act ? "现在轮到你，请提交一个行动。" : `等待 ${data.active_player_id || "其他玩家"} 完成行动。`;
+      $("action-box").hidden = !data.can_act;
+      if (!data.can_act) return;
+      $("action-type").innerHTML = data.allowed_actions.map((action) => `<option value="${escapeHtml(action)}">${escapeHtml(action)}</option>`).join("");
+      const target = $("target");
+      const candidates = data.alive_players.filter((player) => player !== state.playerId);
+      target.innerHTML = `<option value="">无需目标</option>${candidates.map((player) => `<option value="${escapeHtml(player)}">${escapeHtml(player)}</option>`).join("")}`;
+      const actionType = $("action-type").value;
+      target.disabled = ["wolf_speak","speak","noop","abstain"].includes(actionType);
+      $("speech").disabled = !["wolf_speak","speak"].includes(actionType);
+    }
+    function render(data) {
+      state.last = data; $("player-id").textContent = data.player.player_id; $("role").textContent = data.player.role; $("phase").textContent = `${data.phase} · R${data.round_number}`; $("active").textContent = data.active_player_id || "—";
+      $("private").textContent = pretty(data.player); renderAction(data);
+      $("events").innerHTML = state.events.length ? state.events.map((event) => `<div class="event"><strong>${escapeHtml(event.event_type)}</strong> <small>R${escapeHtml(event.round_number)} · ${escapeHtml(event.phase)}</small><div>${escapeHtml(pretty(event.payload))}</div>${event.public ? "" : '<small class="private">私有事件（仅你可见）</small>'}</div>`).join("") : '<p class="muted">暂无授权事件。</p>';
+      if (data.status !== "RUNNING" && state.timer) { clearInterval(state.timer); state.timer = null; }
+    }
+    async function poll() {
+      if (!state.roomId || !state.token) return;
+      try { const data = await request(`/api/rooms/${encodeURIComponent(state.roomId)}/player?after=${state.cursor}`, { headers: authHeaders() }); state.events.push(...data.events); state.cursor = data.cursor; render(data); setError(""); }
+      catch (error) { setError(`玩家状态暂时不可用：${error.message}`); }
+    }
+    function startPolling() { if (!state.timer) { poll(); state.timer = setInterval(poll, 500); } }
+    $("create").addEventListener("click", async () => { try { attachRoom(await request("/api/rooms", { method:"POST", body:JSON.stringify({ seed:Number($("seed").value) }) })); } catch (error) { setError(`创建失败：${error.message}`); } });
+    $("join").addEventListener("click", async () => { if (!state.roomId) return; try { const data = await request(`/api/rooms/${encodeURIComponent(state.roomId)}/sessions`, { method:"POST", body:JSON.stringify({ player_id:$("seat").value }) }); state.token = data.token; state.playerId = data.player_id; $("join").disabled = true; $("start").disabled = false; await poll(); setError(""); } catch (error) { setError(`加入失败：${error.message}`); } });
+    $("start").addEventListener("click", async () => { try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/start`, { method:"POST", body:"{}" }); startPolling(); $("start").disabled = true; } catch (error) { setError(`启动失败：${error.message}`); } });
+    $("action-type").addEventListener("change", () => { const action = $("action-type").value; $("target").disabled = ["wolf_speak","speak","noop","abstain"].includes(action); $("speech").disabled = !["wolf_speak","speak"].includes(action); });
+    $("submit-action").addEventListener("click", async () => { if (!state.canAct) return; const actionType = $("action-type").value; try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/actions`, { method:"POST", headers:authHeaders(), body:JSON.stringify({ action_type:actionType, target_id:$("target").disabled ? null : ($("target").value || null), speech:$("speech").disabled ? "" : $("speech").value }) }); $("action-box").hidden = true; $("action-state").textContent = "行动已提交，等待环境结算。"; state.canAct = false; } catch (error) { setError(`提交失败：${error.message}`); } });
+  </script>
+</body>
+</html>

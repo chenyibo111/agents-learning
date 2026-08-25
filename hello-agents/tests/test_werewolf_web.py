@@ -14,12 +14,13 @@ from urllib.request import Request, urlopen
 
 PROJECT = Path(__file__).resolve().parents[1] / "projects" / "16-graduation-project"
 WEB_HTML = PROJECT / "werewolf_arena" / "web.html"
+PLAYER_HTML = PROJECT / "werewolf_arena" / "player.html"
 sys.path.insert(0, str(PROJECT))
 
 from werewolf_arena.engine import GameEngine
 from werewolf_arena.policies import ModelResponse, ScriptedModelAdapter
 from werewolf_arena.rules import initial_game
-from werewolf_arena.schemas import Phase
+from werewolf_arena.schemas import Phase, Role
 from werewolf_arena.web import RoomConflictError, RoomStore, build_server
 
 if str(PROJECT) in sys.path:
@@ -58,13 +59,16 @@ class WerewolfWebTests(unittest.TestCase):
         self.http_store.close()
         self.http_thread.join(timeout=1.0)
 
-    def request_json(self, method, path, payload=None, expect_error=False):
+    def request_json(self, method, path, payload=None, expect_error=False, headers=None):
         body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request_headers = dict(headers or {})
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
         request = Request(
             self.base_url + path,
             data=body,
             method=method,
-            headers={"Content-Type": "application/json"} if body is not None else {},
+            headers=request_headers,
         )
         try:
             with urlopen(request, timeout=2.0) as response:
@@ -206,6 +210,106 @@ class WerewolfWebTests(unittest.TestCase):
         self.assertNotIn('"role"', body)
         self.assertNotIn('"pending_actions"', body)
         self.assertNotIn('"public": false', body)
+
+    def test_player_session_returns_own_authorized_view_only(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        room = self.http_store.get(created.payload["game_id"])
+        player_id = room.state.players[0].player_id
+
+        session = self.request_json(
+            "POST",
+            f"/api/rooms/{room.game_id}/sessions",
+            {"player_id": player_id},
+        )
+        token = session.payload["token"]
+        self.assertEqual(session.status, 201)
+        self.assertNotIn("role", session.payload)
+
+        player = self.request_json(
+            "GET",
+            f"/api/rooms/{room.game_id}/player?after=0",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        body = json.dumps(player.payload, ensure_ascii=False)
+        self.assertEqual(player.payload["player"]["player_id"], player_id)
+        self.assertIn("role", player.payload["player"])
+        self.assertNotIn("pending_actions", body)
+        self.assertNotIn('"players"', body)
+        self.assertNotIn('"api_key"', body.lower())
+
+    def test_player_action_is_rejected_until_human_turn_is_waiting(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        room = self.http_store.get(created.payload["game_id"])
+        player_id = room.state.players[0].player_id
+        session = self.request_json(
+            "POST",
+            f"/api/rooms/{room.game_id}/sessions",
+            {"player_id": player_id},
+        )
+
+        response = self.request_json(
+            "POST",
+            f"/api/rooms/{room.game_id}/actions",
+            {"action_type": "noop"},
+            expect_error=True,
+            headers={"Authorization": f"Bearer {session.payload['token']}"},
+        )
+        self.assertEqual(response.status, 409)
+        self.assertEqual(response.payload["error"], "player_not_ready")
+
+    def test_human_wolf_action_unblocks_web_room_phase(self):
+        created = self.request_json("POST", "/api/rooms", {"seed": 7})
+        room = self.http_store.get(created.payload["game_id"])
+        room.step_interval = 0.0
+        wolf_id = next(player.player_id for player in room.state.players if player.role == Role.WOLF)
+        session = self.request_json(
+            "POST",
+            f"/api/rooms/{room.game_id}/sessions",
+            {"player_id": wolf_id},
+        )
+        token = session.payload["token"]
+        self.request_json("POST", f"/api/rooms/{room.game_id}/start", {})
+
+        deadline = time.monotonic() + 1.0
+        player = None
+        while time.monotonic() < deadline:
+            player = self.request_json(
+                "GET",
+                f"/api/rooms/{room.game_id}/player?after=0",
+                headers={"Authorization": f"Bearer {token}"},
+            ).payload
+            if player["can_act"]:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(player)
+        self.assertTrue(player["can_act"])
+        self.assertEqual(player["phase"], "night_wolf")
+
+        accepted = self.request_json(
+            "POST",
+            f"/api/rooms/{room.game_id}/actions",
+            {"action_type": "wolf_speak", "speech": "建议先观察最可疑的目标。"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(accepted.status, 202)
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and room.state.phase == Phase.NIGHT_WOLF:
+            time.sleep(0.01)
+        self.assertEqual(room.state.phase, Phase.NIGHT_WOLF_CONFIRM)
+
+    def test_player_page_contains_action_submission_contract(self):
+        html = PLAYER_HTML.read_text(encoding="utf-8")
+        for marker in (
+            "玩家试玩",
+            "/sessions",
+            "/player?after=",
+            "/actions",
+            "Authorization",
+            "can_act",
+            "提交行动",
+        ):
+            self.assertIn(marker, html)
 
     def test_llm_room_persists_replay_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,6 +6,7 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
+import secrets
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,12 +16,14 @@ from urllib.parse import parse_qs, urlparse
 from .engine import GameEngine
 from .evaluation import evaluate_game
 from .policies import LLMConfigurationError, LLMPolicy, ModelAdapter, OpenAICompatibleModelAdapter
-from .rules import finish_draw, initial_game
-from .schemas import GameState
+from .rules import _validate_action, finish_draw, initial_game
+from .schemas import Action, GameState, Phase, Role
 from .storage import ArtifactStore, RequestTraceStore
+from .visibility import discussion_order, observation_for
 
 
 HTML_PATH = Path(__file__).with_name("web.html")
+PLAYER_HTML_PATH = Path(__file__).with_name("player.html")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -34,6 +37,66 @@ class RoomNotFoundError(Exception):
 
 class InvalidCursorError(ValueError):
     """事件增量游标不是非负整数。"""
+
+
+class PlayerAuthenticationError(Exception):
+    """玩家会话令牌无效或缺失。"""
+
+
+class PlayerSessionConflictError(Exception):
+    """房间已经绑定了一个玩家座位或重复绑定。"""
+
+
+class PlayerNotReadyError(Exception):
+    """当前还没有轮到玩家提交行动。"""
+
+
+class InvalidPlayerActionError(ValueError):
+    """玩家 Action 不符合当前阶段的规则。"""
+
+
+class HumanPolicy:
+    """把 Web 玩家 Action 转换成阻塞中的 Policy 决策。"""
+
+    def __init__(self, player_id: str):
+        self.player_id = player_id
+        self._condition = threading.Condition()
+        self._waiting = False
+        self._observation = None
+        self._action: Action | None = None
+        self._cancelled = False
+
+    @property
+    def waiting(self) -> bool:
+        with self._condition:
+            return self._waiting and not self._cancelled
+
+    def decide(self, observation):
+        with self._condition:
+            self._observation = observation
+            self._waiting = True
+            self._condition.notify_all()
+            while self._action is None and not self._cancelled:
+                self._condition.wait()
+            action = self._action or Action(actor_id=self.player_id, action_type="noop")
+            self._action = None
+            self._observation = None
+            self._waiting = False
+            return action
+
+    def submit(self, action: Action) -> None:
+        with self._condition:
+            if self._cancelled or not self._waiting:
+                raise PlayerNotReadyError("player is not waiting for an action")
+            if self._action is not None:
+                raise PlayerSessionConflictError("player action already submitted")
+            self._action = action
+            self._condition.notify_all()
+
+    def cancel(self) -> None:
+        with self._condition:
+            self._cancelled = True
+            self._condition.notify_all()
 
 
 class RequestTraceCollector:
@@ -109,6 +172,10 @@ class Room:
         self._done_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.worker_error: str | None = None
+        self.human_player_id: str | None = None
+        self.human_policy: HumanPolicy | None = None
+        self._session_tokens: dict[str, str] = {}
+        self._session_by_player: dict[str, str] = {}
 
     @property
     def game_id(self) -> str:
@@ -151,6 +218,150 @@ class Room:
             self._thread = threading.Thread(target=self._run, name=f"werewolf-room-{self.game_id}", daemon=True)
             self._thread.start()
 
+    def create_player_session(self, player_id: str) -> str:
+        """创建本地开发座位会话，并把该座位切换为 HumanPolicy。"""
+        with self._state_lock:
+            if self.state.status != "RUNNING" or (self._thread and self._thread.is_alive()):
+                raise PlayerSessionConflictError("room is already running")
+            if not any(player.player_id == player_id for player in self.state.players):
+                raise PlayerAuthenticationError("unknown player")
+            if self.human_player_id is not None or player_id in self._session_by_player:
+                raise PlayerSessionConflictError("room already has a local player seat")
+            policy = HumanPolicy(player_id)
+            self.human_player_id = player_id
+            self.human_policy = policy
+            self.engine.policies[player_id] = policy
+            token = secrets.token_urlsafe(24)
+            self._session_tokens[token] = player_id
+            self._session_by_player[player_id] = token
+            return token
+
+    def _player_for_token(self, token: str | None) -> str:
+        if not token:
+            raise PlayerAuthenticationError("player session token is required")
+        with self._state_lock:
+            player_id = self._session_tokens.get(token)
+        if player_id is None:
+            raise PlayerAuthenticationError("invalid player session token")
+        return player_id
+
+    def _active_player(self, state: GameState) -> str | None:
+        actors = self.engine._actors_for_phase(state)
+        pending = {action.actor_id for action in state.pending_actions}
+        return next((actor for actor in actors if actor not in pending), None)
+
+    @staticmethod
+    def _allowed_actions(state: GameState, player_id: str) -> list[str]:
+        player = next(item for item in state.players if item.player_id == player_id)
+        if not player.alive:
+            return []
+        allowed = {
+            Phase.NIGHT_WOLF: ["wolf_speak", "noop"] if player.role == Role.WOLF else [],
+            Phase.NIGHT_WOLF_CONFIRM: ["wolf_vote", "noop"] if player.role == Role.WOLF else [],
+            Phase.NIGHT_SEER: ["inspect", "noop"] if player.role == Role.SEER else [],
+            Phase.NIGHT_WITCH: ["witch_save", "witch_poison", "noop"] if player.role == Role.WITCH else [],
+            Phase.DAY_DISCUSSION: ["speak"],
+            Phase.DAY_VOTE: ["vote", "abstain"],
+        }.get(state.phase, [])
+        if state.phase == Phase.NIGHT_WITCH and state.night_victim is None:
+            allowed = [action for action in allowed if action != "witch_save"]
+        return allowed
+
+    def player_snapshot(self, token: str | None, after: int = 0) -> dict[str, Any]:
+        """返回单个玩家的授权视图，不包含完整玩家列表或待结算 Action。"""
+        if after < 0:
+            raise InvalidCursorError("after must be a non-negative integer")
+        player_id = self._player_for_token(token)
+        with self._state_lock:
+            state = self.state
+            human_policy = self.human_policy
+            active_player_id = self._active_player(state)
+            player = next(item for item in state.players if item.player_id == player_id)
+            authorized_events = [
+                event for event in state.events[after:]
+                if event.public or player_id in event.recipients
+            ]
+            player_events = []
+            for event in authorized_events:
+                if event.public:
+                    player_events.append(event.to_dict())
+                else:
+                    player_events.append(
+                        {
+                            "event_id": event.event_id,
+                            "round_number": event.round_number,
+                            "phase": event.phase.value,
+                            "event_type": event.event_type,
+                            "payload": event.payload,
+                            "public": False,
+                        }
+                    )
+            observation = observation_for(state, player_id)
+            private = observation.private
+            is_waiting = bool(human_policy and human_policy.waiting and active_player_id == player_id)
+            return {
+                "game_id": state.game_id,
+                "player": {
+                    "player_id": player.player_id,
+                    "role": player.role.value,
+                    "alive": player.alive,
+                    "antidote_available": player.antidote_available,
+                    "poison_available": player.poison_available,
+                    "wolf_teammates": list(private.get("wolf_teammates", [])),
+                    "inspection_results": list(private.get("inspection_results", [])),
+                    "night_victim": private.get("night_victim"),
+                },
+                "phase": state.phase.value,
+                "round_number": state.round_number,
+                "status": state.status,
+                "winner": state.winner,
+                "alive_players": [item.player_id for item in state.players if item.alive],
+                "discussion_order": discussion_order(state) if state.phase == Phase.DAY_DISCUSSION else [],
+                "active_player_id": active_player_id,
+                "can_act": is_waiting,
+                "allowed_actions": self._allowed_actions(state, player_id) if is_waiting else [],
+                "events": player_events,
+                "cursor": len(state.events),
+            }
+
+    def submit_player_action(self, token: str | None, payload: dict[str, Any]) -> dict[str, Any]:
+        """校验并排队一个玩家 Action；规则引擎仍负责最终结算。"""
+        player_id = self._player_for_token(token)
+        action_type = payload.get("action_type")
+        target_id = payload.get("target_id")
+        speech = payload.get("speech", "")
+        decision_label = payload.get("decision_label", "")
+        if not isinstance(action_type, str) or not action_type:
+            raise InvalidPlayerActionError("action_type is required")
+        if target_id is not None and not isinstance(target_id, str):
+            raise InvalidPlayerActionError("target_id must be a string or null")
+        if not isinstance(speech, str) or not isinstance(decision_label, str):
+            raise InvalidPlayerActionError("speech and decision_label must be strings")
+        if len(speech) > 240 or len(decision_label) > 80:
+            raise InvalidPlayerActionError("speech or decision_label is too long")
+        action = Action(
+            actor_id=player_id,
+            action_type=action_type,
+            target_id=target_id,
+            speech=speech,
+            decision_label=decision_label,
+        )
+        with self._state_lock:
+            state = self.state
+            policy = self.human_policy
+        if policy is None or self.human_player_id != player_id:
+            raise PlayerAuthenticationError("player seat is not attached to this room")
+        reason = _validate_action(state, action)
+        if reason:
+            raise InvalidPlayerActionError(reason)
+        policy.submit(action)
+        return {
+            "accepted": True,
+            "game_id": state.game_id,
+            "player_id": player_id,
+            "phase": state.phase.value,
+        }
+
     def _run(self) -> None:
         try:
             while not self._stop_event.is_set():
@@ -182,6 +393,8 @@ class Room:
         }
 
     def stop(self) -> None:
+        if self.human_policy is not None:
+            self.human_policy.cancel()
         with self._state_lock:
             self._stop_event.set()
             thread = self._thread
@@ -314,6 +527,7 @@ def _summary(room: Room) -> dict[str, Any]:
         return {
             "game_id": state.game_id,
             "seed": state.seed,
+            "seats": [player.player_id for player in state.players],
             "policy_mode": room.policy_mode,
             "model": room.model_name or None,
             "pricing_configured": room.pricing_configured,
@@ -350,7 +564,11 @@ def public_snapshot(room: Room, after: int = 0) -> dict[str, Any]:
         }
 
 
-def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
+def make_handler(
+    store: RoomStore,
+    html_path: Path = HTML_PATH,
+    player_html_path: Path = PLAYER_HTML_PATH,
+):
     """生成绑定指定 RoomStore 的标准库 HTTP handler。"""
 
     class Handler(BaseHTTPRequestHandler):
@@ -381,6 +599,19 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
                 raise ValueError("request body must be a JSON object")
             return value
 
+        def _bearer_token(self) -> str | None:
+            value = self.headers.get("Authorization", "")
+            prefix = "Bearer "
+            return value[len(prefix):].strip() if value.startswith(prefix) else None
+
+        def _send_html(self, path: Path) -> None:
+            body = path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _room_route(self, path: list[str]) -> tuple[Room, str] | None:
             if len(path) != 4 or path[:2] != ["api", "rooms"]:
                 return None
@@ -388,17 +619,11 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
             parsed = urlparse(self.path)
-            if parsed.path == "/":
+            if parsed.path in {"/", "/player"}:
                 try:
-                    body = html_path.read_bytes()
+                    self._send_html(html_path if parsed.path == "/" else player_html_path)
                 except OSError:
                     self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "page_unavailable", "audit page is unavailable")
-                    return
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
                 return
             path = [part for part in parsed.path.split("/") if part]
             try:
@@ -409,20 +634,25 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
                     self._send_json(_summary(room))
                     return
                 route = self._room_route(path)
-                if route is None or route[1] not in {"audit", "public"}:
+                if route is None or route[1] not in {"audit", "public", "player"}:
                     self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
                     return
                 room, view = route
                 query = parse_qs(parsed.query)
                 after = _cursor(query, "after")
-                request_after = _cursor(query, "request_after")
-                self._send_json(
-                    room.snapshot(after, request_after) if view == "audit" else public_snapshot(room, after)
-                )
+                if view == "audit":
+                    request_after = _cursor(query, "request_after")
+                    self._send_json(room.snapshot(after, request_after))
+                elif view == "public":
+                    self._send_json(public_snapshot(room, after))
+                else:
+                    self._send_json(room.player_snapshot(self._bearer_token(), after))
             except RoomNotFoundError:
                 self._send_error(HTTPStatus.NOT_FOUND, "room_not_found", "room not found")
             except InvalidCursorError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "invalid_cursor", str(exc))
+            except PlayerAuthenticationError as exc:
+                self._send_error(HTTPStatus.UNAUTHORIZED, "player_unauthorized", str(exc))
             except Exception:
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", "request failed")
 
@@ -438,6 +668,23 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
                     room = store.create(seed=seed)
                     self._send_json(_summary(room), HTTPStatus.CREATED)
                     return
+                if len(path) == 4 and path[:2] == ["api", "rooms"] and path[3] == "sessions":
+                    room = store.get(path[2])
+                    body = self._body()
+                    player_id = body.get("player_id")
+                    if not isinstance(player_id, str) or not player_id:
+                        raise ValueError("player_id must be a non-empty string")
+                    token = room.create_player_session(player_id)
+                    self._send_json(
+                        {"game_id": room.game_id, "player_id": player_id, "token": token, "mode": "local_player"},
+                        HTTPStatus.CREATED,
+                    )
+                    return
+                if len(path) == 4 and path[:2] == ["api", "rooms"] and path[3] == "actions":
+                    room = store.get(path[2])
+                    result = room.submit_player_action(self._bearer_token(), self._body())
+                    self._send_json(result, HTTPStatus.ACCEPTED)
+                    return
                 if len(path) == 4 and path[:2] == ["api", "rooms"] and path[3] == "start":
                     room = store.get(path[2])
                     room.start()
@@ -446,6 +693,14 @@ def make_handler(store: RoomStore, html_path: Path = HTML_PATH):
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
             except RoomConflictError:
                 self._send_error(HTTPStatus.CONFLICT, "room_conflict", "an active room already exists")
+            except PlayerSessionConflictError as exc:
+                self._send_error(HTTPStatus.CONFLICT, "player_session_conflict", str(exc))
+            except PlayerNotReadyError as exc:
+                self._send_error(HTTPStatus.CONFLICT, "player_not_ready", str(exc))
+            except PlayerAuthenticationError as exc:
+                self._send_error(HTTPStatus.UNAUTHORIZED, "player_unauthorized", str(exc))
+            except InvalidPlayerActionError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "invalid_player_action", str(exc))
             except RoomNotFoundError:
                 self._send_error(HTTPStatus.NOT_FOUND, "room_not_found", "room not found")
             except (ValueError, json.JSONDecodeError) as exc:
