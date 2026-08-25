@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 
 PROJECT = Path(__file__).resolve().parents[1] / "projects" / "16-graduation-project"
+WEB_HTML = PROJECT / "werewolf_arena" / "web.html"
 sys.path.insert(0, str(PROJECT))
 
 from werewolf_arena.engine import GameEngine
@@ -126,3 +127,17 @@ class WerewolfWebTests(unittest.TestCase):
         response = self.request_json("GET", "/api/rooms/missing/audit", expect_error=True)
         self.assertEqual(response.status, 404)
         self.assertEqual(response.payload["error"], "room_not_found")
+
+    def test_audit_page_contains_timeline_and_polling_contract(self):
+        html = WEB_HTML.read_text(encoding="utf-8")
+        for marker in (
+            "上帝视角",
+            "开发 / 裁判回放",
+            "/api/rooms",
+            "/audit?after=",
+            "事件时间线",
+            "事件详情",
+            "状态快照",
+            "setInterval",
+        ):
+            self.assertIn(marker, html)

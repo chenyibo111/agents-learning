@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WEREWOLF ARENA · 上帝视角</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d14;
+      --panel: #141824;
+      --panel-2: #1b2030;
+      --line: #2d354c;
+      --muted: #929bb3;
+      --text: #eff2ff;
+      --accent: #8c9bff;
+      --good: #67d4a4;
+      --warn: #f0bb68;
+      --danger: #f07d8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 0%, #1c2040 0, var(--bg) 42rem);
+      color: var(--text);
+      font: 14px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .shell { max-width: 1480px; margin: 0 auto; padding: 28px 28px 56px; }
+    .topbar { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
+    .eyebrow { color: var(--accent); letter-spacing: .16em; font-size: 11px; font-weight: 800; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: clamp(27px, 4vw, 46px); line-height: 1.05; margin: 8px 0 10px; letter-spacing: -.04em; }
+    .subtitle { color: var(--muted); max-width: 660px; margin-bottom: 0; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; background: #1b2337; border: 1px solid #344064; color: #c7d0ff; border-radius: 999px; padding: 7px 11px; font-size: 12px; white-space: nowrap; }
+    .badge::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 12px var(--warn); }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px; background: rgba(20, 24, 36, .9); border: 1px solid var(--line); border-radius: 16px; margin-bottom: 16px; }
+    .toolbar label { color: var(--muted); font-size: 12px; }
+    input { width: 90px; color: var(--text); background: #0e1220; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+    button { border: 1px solid #49558b; border-radius: 9px; padding: 8px 13px; color: #f7f8ff; background: #283258; }
+    button:hover { background: #364475; }
+    button.secondary { background: transparent; border-color: var(--line); color: var(--muted); }
+    .room-meta { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .error { color: #ffd6da; background: #3a1d2a; border: 1px solid #774050; padding: 10px 13px; border-radius: 10px; margin-bottom: 16px; display: none; }
+    .kpis { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .kpi, .panel { background: linear-gradient(145deg, rgba(27,32,48,.98), rgba(17,20,31,.98)); border: 1px solid var(--line); border-radius: 16px; }
+    .kpi { padding: 14px; min-height: 83px; }
+    .kpi .label, .section-label { color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    .kpi .value { font-size: 20px; font-weight: 750; margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .workspace { display: grid; grid-template-columns: minmax(240px, .95fr) minmax(320px, 1.45fr) minmax(270px, .9fr); gap: 16px; align-items: start; }
+    .panel { min-height: 460px; overflow: hidden; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 17px 13px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { font-size: 14px; margin: 0; }
+    .panel-head span { color: var(--muted); font-size: 12px; }
+    .timeline { padding: 9px; max-height: 620px; overflow: auto; }
+    .event { display: block; width: 100%; text-align: left; padding: 11px 12px; margin: 4px 0; background: transparent; border: 1px solid transparent; border-radius: 11px; color: var(--text); }
+    .event:hover, .event.selected { background: #252c45; border-color: #48568b; }
+    .event-row { display: flex; gap: 8px; align-items: center; }
+    .event-index { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .event-type { font-weight: 700; font-size: 13px; }
+    .event-meta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+    .event-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    .event.private .event-dot { background: var(--warn); }
+    .event.reject .event-dot { background: var(--danger); }
+    .event.finish .event-dot { background: var(--good); }
+    .empty { padding: 32px 18px; color: var(--muted); text-align: center; }
+    .detail, .snapshot { padding: 17px; }
+    .detail h3 { margin-bottom: 5px; font-size: 18px; }
+    .detail p { color: var(--muted); margin-bottom: 14px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #dbe0ff; background: #0c101b; border: 1px solid #252d43; border-radius: 10px; padding: 13px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .snapshot pre { max-height: 470px; overflow: auto; }
+    .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 15px; }
+    .metric { background: #101421; border: 1px solid #252d43; border-radius: 10px; padding: 9px; }
+    .metric small { display: block; color: var(--muted); }
+    .metric strong { display: block; margin-top: 3px; font-size: 15px; }
+    .footer-note { color: var(--muted); margin-top: 18px; font-size: 12px; }
+    @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr 1fr; } .snapshot { grid-column: 1 / -1; } .kpis { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 680px) { .shell { padding: 20px 14px 40px; } .topbar { display: block; } .badge { margin-top: 16px; } .workspace { grid-template-columns: 1fr; } .snapshot { grid-column: auto; } .kpis { grid-template-columns: repeat(2, 1fr); } .room-meta { width: 100%; margin-left: 0; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">WEREWOLF ARENA / AUDIT CONSOLE</div>
+        <h1>上帝视角 · 时间线审计台</h1>
+        <p class="subtitle">按事件顺序观察服务端权威 GameState。这里展示完整身份、私有行动和规则判定，仅用于开发验证与裁判回放。</p>
+      </div>
+      <div class="badge">开发 / 裁判回放</div>
+    </header>
+
+    <section class="toolbar">
+      <label for="seed">演示 seed</label>
+      <input id="seed" type="number" value="7" step="1">
+      <button id="create">创建演示局</button>
+      <button id="start">开始自动回放</button>
+      <button id="refresh" class="secondary">刷新</button>
+      <div id="room-meta" class="room-meta">尚未连接房间</div>
+    </section>
+    <div id="error" class="error" role="alert"></div>
+
+    <section class="kpis" aria-label="状态指标">
+      <div class="kpi"><div class="label">当前阶段</div><div id="phase" class="value">—</div></div>
+      <div class="kpi"><div class="label">轮次</div><div id="round" class="value">—</div></div>
+      <div class="kpi"><div class="label">存活人数</div><div id="alive" class="value">—</div></div>
+      <div class="kpi"><div class="label">状态 / 胜者</div><div id="status" class="value">—</div></div>
+      <div class="kpi"><div class="label">事件游标</div><div id="cursor" class="value">0</div></div>
+      <div class="kpi"><div class="label">请求 / 延迟</div><div id="latency" class="value">—</div></div>
+    </section>
+
+    <section class="workspace">
+      <article class="panel">
+        <div class="panel-head"><h2>事件时间线</h2><span id="event-count">0 events</span></div>
+        <div id="timeline" class="timeline"><div class="empty">创建房间后，事件会按阶段出现在这里。</div></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>事件详情</h2><span id="selected-meta">未选择</span></div>
+        <div id="detail" class="detail"><div class="empty">点击左侧事件查看完整 payload 和规则。</div></div>
+      </article>
+      <article class="panel snapshot">
+        <div class="panel-head" style="margin: -17px -17px 16px"><h2>状态快照</h2><span>GameState</span></div>
+        <div id="metrics" class="metric-grid"></div>
+        <pre id="snapshot">等待服务端快照…</pre>
+      </article>
+    </section>
+    <p class="footer-note">本页面只读取裁判 API，不提供 Action 注入或状态修改；默认服务只绑定 127.0.0.1。</p>
+  </main>
+
+  <script>
+    const state = { roomId: null, cursor: 0, events: [], gameState: null, timer: null, selected: null };
+    const $ = (id) => document.getElementById(id);
+    const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+    const pretty = (value) => JSON.stringify(value, null, 2);
+    const label = (type) => String(type || "event").replaceAll("_", " ");
+    const setError = (message = "") => { $("error").textContent = message; $("error").style.display = message ? "block" : "none"; };
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+      return payload;
+    }
+
+    function attachRoom(payload) {
+      state.roomId = payload.game_id;
+      state.cursor = 0;
+      state.events = [];
+      state.gameState = null;
+      state.selected = null;
+      $("room-meta").textContent = `${payload.game_id} · seed ${payload.seed} · ${payload.status}`;
+      $("timeline").innerHTML = "";
+      $("detail").innerHTML = '<div class="empty">等待第一条审计事件…</div>';
+      setError("");
+    }
+
+    function renderEvent(event, index) {
+      const classes = event.event_type === "action_rejected" ? "reject" : event.public ? "" : "private";
+      const selected = state.selected === event.event_id ? " selected" : "";
+      return `<button class="event ${classes}${selected}" data-event-id="${escapeHtml(event.event_id)}"><span class="event-row"><span class="event-dot"></span><span class="event-index">#${index + 1}</span><span class="event-type">${escapeHtml(label(event.event_type))}</span></span><span class="event-meta">R${event.round_number} · ${escapeHtml(event.phase)} · ${event.public ? "public" : "private"}</span></button>`;
+    }
+
+    function showDetail(event) {
+      if (!event) { $("detail").innerHTML = '<div class="empty">点击左侧事件查看完整 payload 和规则。</div>'; $("selected-meta").textContent = "未选择"; return; }
+      state.selected = event.event_id;
+      $("selected-meta").textContent = `${event.round_number} / ${event.phase}`;
+      $("detail").innerHTML = `<h3>${escapeHtml(label(event.event_type))}</h3><p>${escapeHtml(event.event_id)} · ${event.public ? "公开事件" : "私有事件"}</p><div class="section-label">规则</div><pre>${escapeHtml(event.rule || "—")}</pre><div class="section-label">Payload</div><pre>${escapeHtml(pretty(event.payload))}</pre><div class="section-label">Recipients</div><pre>${escapeHtml(pretty(event.recipients || []))}</pre>`;
+      document.querySelectorAll(".event").forEach((node) => node.classList.toggle("selected", node.dataset.eventId === event.event_id));
+    }
+
+    function render(data) {
+      const game = data.state;
+      state.gameState = game;
+      $("phase").textContent = game.phase;
+      $("round").textContent = `第 ${game.round_number} 轮`;
+      $("alive").textContent = `${game.players.filter((player) => player.alive).length} / ${game.players.length}`;
+      $("status").textContent = `${game.status}${game.winner ? ` · ${game.winner}` : ""}`;
+      $("cursor").textContent = data.cursor;
+      $("event-count").textContent = `${state.events.length} events`;
+      const metrics = game.metrics || {};
+      $("latency").textContent = `${metrics.request_count || 0} / ${metrics.latency_ms || 0}ms`;
+      $("metrics").innerHTML = [
+        ["规则拒绝", game.events.filter((event) => event.event_type === "action_rejected").length],
+        ["模型请求", metrics.request_count || 0],
+        ["截断次数", metrics.output_truncated_count || 0],
+        ["降级次数", metrics.fallback_count || 0],
+      ].map(([name, value]) => `<div class="metric"><small>${escapeHtml(name)}</small><strong>${escapeHtml(value)}</strong></div>`).join("");
+      $("snapshot").textContent = pretty(game);
+      $("timeline").innerHTML = state.events.length ? state.events.map(renderEvent).join("") : '<div class="empty">暂无事件。</div>';
+      document.querySelectorAll(".event").forEach((node) => node.addEventListener("click", () => showDetail(state.events.find((event) => event.event_id === node.dataset.eventId))));
+      showDetail(state.selected ? state.events.find((event) => event.event_id === state.selected) : state.events[state.events.length - 1]);
+      if (game.status !== "RUNNING" && state.timer) { clearInterval(state.timer); state.timer = null; }
+    }
+
+    async function poll() {
+      if (!state.roomId) return;
+      try {
+        const auditUrl = `/api/rooms/${encodeURIComponent(state.roomId)}/audit?after=`;
+        const data = await request(`${auditUrl}${state.cursor}`);
+        state.events.push(...data.events);
+        state.cursor = data.cursor;
+        render(data);
+        setError("");
+      } catch (error) { setError(`审计 API 暂时不可用：${error.message}`); }
+    }
+
+    function startPolling() { if (!state.timer) { poll(); state.timer = setInterval(poll, 500); } }
+
+    $("create").addEventListener("click", async () => {
+      try {
+        const payload = await request("/api/rooms", { method: "POST", body: JSON.stringify({ seed: Number($("seed").value) }) });
+        attachRoom(payload);
+        await poll();
+      } catch (error) { setError(`创建失败：${error.message}`); }
+    });
+    $("start").addEventListener("click", async () => {
+      if (!state.roomId) { setError("请先创建或加载一个房间。"); return; }
+      try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/start`, { method: "POST", body: "{}" }); startPolling(); setError(""); }
+      catch (error) { setError(`启动失败：${error.message}`); }
+    });
+    $("refresh").addEventListener("click", poll);
+    request("/api/rooms").then((payload) => { attachRoom(payload); startPolling(); }).catch(() => {});
+  </script>
+</body>
+</html>
