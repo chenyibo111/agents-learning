@@ -43,6 +43,12 @@ class GameEngine:
             state = submit_action(state, policy.decide(observation_for(state, player_id)))
         return advance_phase(state)
 
+    def step(self, state: GameState) -> GameState:
+        """收集并结算当前阶段一次，供 Web worker 和单步测试复用。"""
+        if state.status != "RUNNING":
+            return state
+        return self._advance_one_phase(state)
+
     def run(
         self,
         max_rounds: int = 3,
@@ -65,7 +71,7 @@ class GameEngine:
                 break
             # 每次循环只推进一个阶段，便于 checkpoint、回放和定位失败。
             event_count = len(state.events)
-            state = self._advance_one_phase(state)
+            state = self.step(state)
             if on_public_event:
                 for line in render_public_events(state.events[event_count:]):
                     try:
