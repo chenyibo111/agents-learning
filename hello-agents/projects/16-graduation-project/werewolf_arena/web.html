@@ -35,6 +35,8 @@
     .subtitle { color: var(--muted); max-width: 660px; margin-bottom: 0; }
     .badge { display: inline-flex; align-items: center; gap: 8px; background: #1b2337; border: 1px solid #344064; color: #c7d0ff; border-radius: 999px; padding: 7px 11px; font-size: 12px; white-space: nowrap; }
     .badge::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 12px var(--warn); }
+    .badge.llm { color: #d6ffe9; border-color: #2e765e; background: #143327; }
+    .badge.llm::before { background: var(--good); box-shadow: 0 0 12px var(--good); }
     .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px; background: rgba(20, 24, 36, .9); border: 1px solid var(--line); border-radius: 16px; margin-bottom: 16px; }
     .toolbar label { color: var(--muted); font-size: 12px; }
     input { width: 90px; color: var(--text); background: #0e1220; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
@@ -74,6 +76,19 @@
     .metric { background: #101421; border: 1px solid #252d43; border-radius: 10px; padding: 9px; }
     .metric small { display: block; color: var(--muted); }
     .metric strong { display: block; margin-top: 3px; font-size: 15px; }
+    .request-panel { min-height: 0; margin-top: 16px; }
+    .request-list { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 9px; padding: 12px; max-height: 390px; overflow: auto; }
+    .request { background: #101421; border: 1px solid #252d43; border-radius: 11px; padding: 11px 12px; }
+    .request-head, .request-meta { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .request-head strong { font-size: 13px; }
+    .request-head span, .request-meta { color: var(--muted); font-size: 11px; }
+    .request-meta { justify-content: flex-start; flex-wrap: wrap; margin-top: 7px; }
+    .request-chip { border-radius: 999px; padding: 2px 7px; border: 1px solid #3c4869; color: #cbd3ff; }
+    .request-chip.good { border-color: #2e765e; color: #b8f0d5; }
+    .request-chip.warn { border-color: #8a6b37; color: #ffd98f; }
+    .request-chip.danger { border-color: #804352; color: #ffbdc5; }
+    .request-reason { margin: 8px 0 0; color: #ffd98f; font-size: 11px; overflow-wrap: anywhere; }
+    .request-empty { grid-column: 1 / -1; }
     .footer-note { color: var(--muted); margin-top: 18px; font-size: 12px; }
     @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr 1fr; } .snapshot { grid-column: 1 / -1; } .kpis { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 680px) { .shell { padding: 20px 14px 40px; } .topbar { display: block; } .badge { margin-top: 16px; } .workspace { grid-template-columns: 1fr; } .snapshot { grid-column: auto; } .kpis { grid-template-columns: repeat(2, 1fr); } .room-meta { width: 100%; margin-left: 0; } }
@@ -87,7 +102,7 @@
         <h1>上帝视角 · 时间线审计台</h1>
         <p class="subtitle">按事件顺序观察服务端权威 GameState。这里展示完整身份、私有行动和规则判定，仅用于开发验证与裁判回放。</p>
       </div>
-      <div class="badge">开发 / 裁判回放</div>
+      <div id="mode-badge" class="badge">开发 / 裁判回放</div>
     </header>
 
     <section class="toolbar">
@@ -124,11 +139,15 @@
         <pre id="snapshot">等待服务端快照…</pre>
       </article>
     </section>
+    <section class="panel request-panel">
+      <div class="panel-head"><h2>请求流</h2><span id="request-count">0 requests · cursor 0</span></div>
+      <div id="request-flow" class="request-list"><div class="empty request-empty">真实 LLM 模式下，模型请求完成后会在这里出现脱敏摘要。</div></div>
+    </section>
     <p class="footer-note">本页面只读取裁判 API，不提供 Action 注入或状态修改；默认服务只绑定 127.0.0.1。</p>
   </main>
 
   <script>
-    const state = { roomId: null, cursor: 0, events: [], gameState: null, timer: null, selected: null };
+    const state = { roomId: null, cursor: 0, requestCursor: 0, events: [], requests: [], gameState: null, timer: null, selected: null, polling: false, policyMode: "rule", model: null, pricingConfigured: false };
     const $ = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
     const pretty = (value) => JSON.stringify(value, null, 2);
@@ -145,13 +164,31 @@
     function attachRoom(payload) {
       state.roomId = payload.game_id;
       state.cursor = 0;
+      state.requestCursor = 0;
       state.events = [];
+      state.requests = [];
       state.gameState = null;
       state.selected = null;
+      state.policyMode = payload.policy_mode || "rule";
+      state.model = payload.model || null;
+      state.pricingConfigured = Boolean(payload.pricing_configured);
+      updateMode(payload);
       $("room-meta").textContent = `${payload.game_id} · seed ${payload.seed} · ${payload.status}`;
       $("timeline").innerHTML = "";
       $("detail").innerHTML = '<div class="empty">等待第一条审计事件…</div>';
+      $("request-flow").innerHTML = '<div class="empty request-empty">真实 LLM 模式下，模型请求完成后会在这里出现脱敏摘要。</div>';
+      $("request-count").textContent = "0 requests · cursor 0";
       setError("");
+    }
+
+    function updateMode(data) {
+      state.policyMode = data.policy_mode || state.policyMode;
+      state.model = data.model || state.model;
+      state.pricingConfigured = Boolean(data.pricing_configured);
+      const badge = $("mode-badge");
+      const real = state.policyMode === "llm";
+      badge.textContent = real ? `REAL LLM · ${state.model || "model unknown"}` : "规则模式 · 开发 / 裁判回放";
+      badge.classList.toggle("llm", real);
     }
 
     function renderEvent(event, index) {
@@ -168,9 +205,34 @@
       document.querySelectorAll(".event").forEach((node) => node.classList.toggle("selected", node.dataset.eventId === event.event_id));
     }
 
+    function formatCost(value) {
+      const cost = Number(value || 0);
+      return `$${cost.toFixed(6)}`;
+    }
+
+    function renderRequest(record) {
+      const requestStatus = record.request_status === "succeeded" ? "成功" : "失败";
+      const decisionStatus = record.decision_status === "parsed" ? "已解析" : "已降级";
+      const statusClass = record.request_status === "succeeded" ? "good" : "danger";
+      const decisionClass = record.decision_status === "parsed" ? "good" : "warn";
+      const reason = record.fallback_reason || record.failure_reason || record.repair_reason;
+      const truncation = record.truncated ? `<span class="request-chip warn">truncated</span>` : "";
+      return `<article class="request"><div class="request-head"><strong>${escapeHtml(record.agent_id || "unknown agent")}</strong><span>${escapeHtml(record.phase || "—")} · R${escapeHtml(record.round || "—")}</span></div><div class="request-meta"><span class="request-chip ${statusClass}">${requestStatus}</span><span class="request-chip ${decisionClass}">${decisionStatus}</span>${truncation}<span>${escapeHtml(record.latency_ms || 0)}ms</span><span>${escapeHtml(record.input_tokens || 0)} in / ${escapeHtml(record.output_tokens || 0)} out</span><span>${formatCost(record.cost_usd)}</span></div>${reason ? `<p class="request-reason">${escapeHtml(reason)}</p>` : ""}</article>`;
+    }
+
+    function renderRequests() {
+      $("request-count").textContent = `${state.requests.length} requests · cursor ${state.requestCursor}`;
+      if (!state.requests.length) {
+        $("request-flow").innerHTML = '<div class="empty request-empty">真实 LLM 模式下，模型请求完成后会在这里出现脱敏摘要。</div>';
+        return;
+      }
+      $("request-flow").innerHTML = state.requests.slice().reverse().map(renderRequest).join("");
+    }
+
     function render(data) {
       const game = data.state;
       state.gameState = game;
+      updateMode(data);
       $("phase").textContent = game.phase;
       $("round").textContent = `第 ${game.round_number} 轮`;
       $("alive").textContent = `${game.players.filter((player) => player.alive).length} / ${game.players.length}`;
@@ -186,6 +248,7 @@
         ["降级次数", metrics.fallback_count || 0],
       ].map(([name, value]) => `<div class="metric"><small>${escapeHtml(name)}</small><strong>${escapeHtml(value)}</strong></div>`).join("");
       $("snapshot").textContent = pretty(game);
+      renderRequests();
       $("timeline").innerHTML = state.events.length ? state.events.map(renderEvent).join("") : '<div class="empty">暂无事件。</div>';
       document.querySelectorAll(".event").forEach((node) => node.addEventListener("click", () => showDetail(state.events.find((event) => event.event_id === node.dataset.eventId))));
       showDetail(state.selected ? state.events.find((event) => event.event_id === state.selected) : state.events[state.events.length - 1]);
@@ -193,15 +256,19 @@
     }
 
     async function poll() {
-      if (!state.roomId) return;
+      if (!state.roomId || state.polling) return;
+      state.polling = true;
       try {
-        const auditUrl = `/api/rooms/${encodeURIComponent(state.roomId)}/audit?after=`;
-        const data = await request(`${auditUrl}${state.cursor}`);
+        const auditUrl = `/api/rooms/${encodeURIComponent(state.roomId)}/audit?after=${state.cursor}&request_after=${state.requestCursor}`;
+        const data = await request(auditUrl);
         state.events.push(...data.events);
+        state.requests.push(...data.llm_requests);
         state.cursor = data.cursor;
+        state.requestCursor = data.request_cursor;
         render(data);
         setError("");
-      } catch (error) { setError(`审计 API 暂时不可用：${error.message}`); }
+      } catch (error) { setError(`审计 API 暂时不可用：${error.message}（保留最近一次快照）`); }
+      finally { state.polling = false; }
     }
 
     function startPolling() { if (!state.timer) { poll(); state.timer = setInterval(poll, 500); } }

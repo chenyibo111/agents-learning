@@ -3,6 +3,7 @@ import os
 import sys
 import subprocess
 import time
+import tempfile
 from types import SimpleNamespace
 from pathlib import Path
 import threading
@@ -41,6 +42,9 @@ class WerewolfWebTests(unittest.TestCase):
 
     def setUp(self):
         self.http_adapter = ScriptedModelAdapter(['{"action_type": "wolf_speak", "speech": "先观察公开票型。"}'])
+        self.http_adapter.model = "configured-model"
+        self.http_adapter.input_price_per_million = 1.0
+        self.http_adapter.output_price_per_million = 2.0
         self.http_store = RoomStore(policy_mode="llm", model_adapter=self.http_adapter, step_interval=60.0)
         self.http_server = build_server("127.0.0.1", 0, store=self.http_store)
         self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
@@ -203,6 +207,49 @@ class WerewolfWebTests(unittest.TestCase):
         self.assertNotIn('"pending_actions"', body)
         self.assertNotIn('"public": false', body)
 
+    def test_llm_room_persists_replay_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            adapter = ScriptedModelAdapter(['{"action_type": "noop"}'])
+            store = RoomStore(
+                policy_mode="llm",
+                model_adapter=adapter,
+                output_root=Path(temporary),
+                step_interval=0.001,
+                max_rounds=1,
+            )
+            room = store.create(seed=7)
+            room.start()
+
+            self.assertTrue(room.wait_until_done(timeout=2.0))
+            run_dir = Path(room.snapshot(after=0, request_after=0)["artifacts"]["run_dir"])
+            for name in (
+                "checkpoint.json",
+                "events.jsonl",
+                "report.json",
+                "spectator.html",
+                "god_view.html",
+                "llm_requests.jsonl",
+            ):
+                self.assertTrue((run_dir / name).exists(), name)
+            store.close()
+
+    def test_llm_module_fails_fast_without_model_configuration(self):
+        environment = dict(os.environ)
+        environment["WEREWOLF_LLM_ENDPOINT"] = ""
+        environment["WEREWOLF_LLM_API_KEY"] = "do-not-echo-this-secret"
+        environment["WEREWOLF_LLM_MODEL"] = ""
+        process = subprocess.run(
+            [sys.executable, "-m", "werewolf_arena.web", "--policy", "llm", "--port", "0"],
+            cwd=PROJECT,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=5,
+        )
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("WEREWOLF_LLM_ENDPOINT", process.stderr)
+        self.assertNotIn("do-not-echo-this-secret", process.stderr)
+
     def test_audit_page_contains_timeline_and_polling_contract(self):
         html = WEB_HTML.read_text(encoding="utf-8")
         for marker in (
@@ -214,6 +261,19 @@ class WerewolfWebTests(unittest.TestCase):
             "事件详情",
             "状态快照",
             "setInterval",
+        ):
+            self.assertIn(marker, html)
+
+    def test_audit_page_contains_realtime_llm_request_flow_contract(self):
+        html = WEB_HTML.read_text(encoding="utf-8")
+        for marker in (
+            "REAL LLM",
+            "llm_requests",
+            "request_after=",
+            "请求流",
+            "truncated",
+            "fallback_reason",
+            "pricing_configured",
         ):
             self.assertIn(marker, html)
 

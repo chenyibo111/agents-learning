@@ -13,13 +13,15 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
 from .engine import GameEngine
-from .policies import LLMPolicy, ModelAdapter
+from .evaluation import evaluate_game
+from .policies import LLMConfigurationError, LLMPolicy, ModelAdapter, OpenAICompatibleModelAdapter
 from .rules import finish_draw, initial_game
 from .schemas import GameState
-from .storage import RequestTraceStore
+from .storage import ArtifactStore, RequestTraceStore
 
 
 HTML_PATH = Path(__file__).with_name("web.html")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class RoomConflictError(Exception):
@@ -89,6 +91,7 @@ class Room:
         model_name: str = "",
         pricing_configured: bool = False,
         request_collector: RequestTraceCollector | None = None,
+        run_dir: Path | None = None,
     ):
         self.state = state
         self.engine = GameEngine(seed=state.seed, policies=policies)
@@ -98,6 +101,8 @@ class Room:
         self.model_name = model_name
         self.pricing_configured = pricing_configured
         self.request_collector = request_collector or RequestTraceCollector()
+        self.run_dir = run_dir
+        self.artifacts: dict[str, str] = {}
         self._state_lock = threading.RLock()
         self._step_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -129,6 +134,7 @@ class Room:
                 next_state = self.engine.step(current_state)
             with self._state_lock:
                 self.state = next_state
+            self._persist()
             if next_state.status != "RUNNING":
                 self._done_event.set()
             return next_state
@@ -158,6 +164,22 @@ class Room:
                 self.worker_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                 self.state = replace(self.state, status="ERROR")
                 self._done_event.set()
+                try:
+                    self._persist()
+                except Exception:
+                    pass
+
+    def _persist(self) -> None:
+        if self.run_dir is None:
+            return
+        with self._state_lock:
+            state = self.state
+        report = evaluate_game(state, offline=self.policy_mode != "llm")
+        artifact_paths = ArtifactStore(self.run_dir).write(state, report, god_view=True)
+        self.artifacts = {
+            "run_dir": str(self.run_dir),
+            **artifact_paths,
+        }
 
     def stop(self) -> None:
         with self._state_lock:
@@ -196,7 +218,7 @@ class Room:
             "request_cursor": request_cursor,
             "running": running,
             "worker_error": worker_error,
-            "artifacts": {},
+            "artifacts": dict(self.artifacts),
         }
 
 
@@ -211,6 +233,7 @@ class RoomStore:
         default_seed: int = 7,
         policy_mode: str = "rule",
         model_adapter: ModelAdapter | None = None,
+        output_root: Path | None = None,
     ):
         if policy_mode not in {"rule", "llm"}:
             raise ValueError("policy_mode must be rule or llm")
@@ -219,6 +242,7 @@ class RoomStore:
         self.default_seed = default_seed
         self.policy_mode = policy_mode
         self.model_adapter = model_adapter
+        self.output_root = Path(output_root) if output_root is not None else None
         self._lock = threading.RLock()
         self._room: Room | None = None
 
@@ -229,7 +253,10 @@ class RoomStore:
             if self._room is not None:
                 self._room.stop()
             state = initial_game(self.default_seed if seed is None else seed)
-            collector = RequestTraceCollector()
+            run_dir = None
+            if self.output_root is not None:
+                run_dir = ArtifactStore.default_run_directory(self.output_root, state.seed)
+            collector = RequestTraceCollector(run_dir / "llm_requests.jsonl" if run_dir else None)
             policies = _build_policies(state, self.policy_mode, self.model_adapter, collector.append)
             model_name = getattr(self.model_adapter, "model", "") if self.policy_mode == "llm" else ""
             pricing_configured = bool(
@@ -249,6 +276,7 @@ class RoomStore:
                 model_name=model_name,
                 pricing_configured=pricing_configured,
                 request_collector=collector,
+                run_dir=run_dir,
             )
             return self._room
 
@@ -440,9 +468,25 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--step-interval", type=float, default=0.5)
+    parser.add_argument("--policy", choices=("rule", "llm"), default="rule")
+    parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
     args = parser.parse_args()
-    store = RoomStore(step_interval=args.step_interval, default_seed=args.seed)
+    model_adapter = None
+    if args.policy == "llm":
+        try:
+            model_adapter = OpenAICompatibleModelAdapter.from_environment()
+        except LLMConfigurationError as error:
+            parser.error(str(error))
+    store = RoomStore(
+        step_interval=args.step_interval,
+        max_rounds=args.max_rounds,
+        default_seed=args.seed,
+        policy_mode=args.policy,
+        model_adapter=model_adapter,
+        output_root=args.output_root,
+    )
     room = store.create(seed=args.seed)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(store))
     print(f"狼人杀上帝视角审计台：{room.game_id} http://{args.host}:{server.server_port}/", flush=True)
