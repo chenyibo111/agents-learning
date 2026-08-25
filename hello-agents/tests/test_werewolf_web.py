@@ -302,6 +302,8 @@ class WerewolfWebTests(unittest.TestCase):
         html = PLAYER_HTML.read_text(encoding="utf-8")
         for marker in (
             "玩家试玩",
+            "加载已有房间",
+            "request(\"/api/rooms\")",
             "/sessions",
             "/player?after=",
             "/actions",

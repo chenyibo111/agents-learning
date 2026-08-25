@@ -22,7 +22,7 @@
     .grid { display:grid; grid-template-columns:minmax(280px,.85fr) minmax(360px,1.35fr); gap:16px; align-items:start; }
     .panel { background:linear-gradient(145deg,rgba(28,36,56,.98),rgba(17,20,31,.98)); border:1px solid var(--line); border-radius:16px; padding:17px; }
     .panel h2 { margin:0 0 13px; font-size:15px; } .panel + .panel { margin-top:16px; }
-    .toolbar { display:grid; grid-template-columns:100px 1fr auto; gap:10px; align-items:end; }
+    .toolbar { display:grid; grid-template-columns:100px 1fr auto auto; gap:10px; align-items:end; }
     label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
     .status { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin:16px 0; }
     .stat { background:#101421; border:1px solid #252d43; border-radius:11px; padding:10px; }
@@ -50,7 +50,7 @@
       <div class="toolbar">
         <div><label for="seed">Seed</label><input id="seed" type="number" value="7" step="1"></div>
         <div><label for="seat">玩家座位</label><select id="seat" disabled><option>先创建房间</option></select></div>
-        <button id="create">创建房间</button>
+        <button id="create">创建房间</button><button id="load">加载已有房间</button>
       </div>
       <div class="toolbar" style="margin-top:10px;grid-template-columns:1fr auto">
         <div id="room-meta" class="muted">尚未创建房间</div>
@@ -74,7 +74,7 @@
     <p class="footer">玩家接口使用临时内存会话；完整身份、私有事件和上帝视角数据不会通过玩家接口返回。</p>
   </main>
   <script>
-    const state = { roomId:null, token:null, playerId:null, cursor:0, events:[], timer:null, canAct:false, last:null };
+    const state = { roomId:null, token:null, playerId:null, cursor:0, events:[], timer:null, canAct:false, last:null, running:false };
     const $ = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
     const pretty = (value) => JSON.stringify(value, null, 2);
@@ -88,10 +88,14 @@
     }
     function authHeaders() { return state.token ? { Authorization: `Bearer ${state.token}` } : {}; }
     function attachRoom(payload) {
-      state.roomId = payload.game_id; state.cursor = 0; state.events = [];
-      $("room-meta").textContent = `${payload.game_id} · seed ${payload.seed}`;
+      state.roomId = payload.game_id; state.cursor = 0; state.events = []; state.running = Boolean(payload.running);
+      $("room-meta").textContent = `${payload.game_id} · seed ${payload.seed} · ${payload.running ? "运行中" : "待开始"}`;
       $("seat").innerHTML = payload.seats.map((seat) => `<option value="${escapeHtml(seat)}">${escapeHtml(seat)}</option>`).join("");
-      $("seat").disabled = false; $("join").disabled = false; setError("");
+      $("seat").disabled = false; $("join").disabled = false; $("start").disabled = state.running; setError("");
+    }
+    async function loadExistingRoom(showError = true) {
+      try { attachRoom(await request("/api/rooms")); }
+      catch (error) { if (showError) setError(`加载已有房间失败：${error.message}`); }
     }
     function renderAction(data) {
       state.canAct = Boolean(data.can_act);
@@ -118,11 +122,13 @@
       catch (error) { setError(`玩家状态暂时不可用：${error.message}`); }
     }
     function startPolling() { if (!state.timer) { poll(); state.timer = setInterval(poll, 500); } }
-    $("create").addEventListener("click", async () => { try { attachRoom(await request("/api/rooms", { method:"POST", body:JSON.stringify({ seed:Number($("seed").value) }) })); } catch (error) { setError(`创建失败：${error.message}`); } });
+    $("create").addEventListener("click", async () => { try { attachRoom(await request("/api/rooms", { method:"POST", body:JSON.stringify({ seed:Number($("seed").value) }) })); } catch (error) { await loadExistingRoom(); } });
+    $("load").addEventListener("click", () => loadExistingRoom());
     $("join").addEventListener("click", async () => { if (!state.roomId) return; try { const data = await request(`/api/rooms/${encodeURIComponent(state.roomId)}/sessions`, { method:"POST", body:JSON.stringify({ player_id:$("seat").value }) }); state.token = data.token; state.playerId = data.player_id; $("join").disabled = true; $("start").disabled = false; await poll(); setError(""); } catch (error) { setError(`加入失败：${error.message}`); } });
-    $("start").addEventListener("click", async () => { try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/start`, { method:"POST", body:"{}" }); startPolling(); $("start").disabled = true; } catch (error) { setError(`启动失败：${error.message}`); } });
+    $("start").addEventListener("click", async () => { try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/start`, { method:"POST", body:"{}" }); state.running = true; startPolling(); $("start").disabled = true; } catch (error) { setError(`启动失败：${error.message}`); } });
     $("action-type").addEventListener("change", () => { const action = $("action-type").value; $("target").disabled = ["wolf_speak","speak","noop","abstain"].includes(action); $("speech").disabled = !["wolf_speak","speak"].includes(action); });
     $("submit-action").addEventListener("click", async () => { if (!state.canAct) return; const actionType = $("action-type").value; try { await request(`/api/rooms/${encodeURIComponent(state.roomId)}/actions`, { method:"POST", headers:authHeaders(), body:JSON.stringify({ action_type:actionType, target_id:$("target").disabled ? null : ($("target").value || null), speech:$("speech").disabled ? "" : $("speech").value }) }); $("action-box").hidden = true; $("action-state").textContent = "行动已提交，等待环境结算。"; state.canAct = false; } catch (error) { setError(`提交失败：${error.message}`); } });
+    loadExistingRoom(false);
   </script>
 </body>
 </html>
