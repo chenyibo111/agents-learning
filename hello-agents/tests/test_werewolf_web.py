@@ -15,6 +15,7 @@ WEB_HTML = PROJECT / "werewolf_arena" / "web.html"
 sys.path.insert(0, str(PROJECT))
 
 from werewolf_arena.engine import GameEngine
+from werewolf_arena.policies import ScriptedModelAdapter
 from werewolf_arena.rules import initial_game
 from werewolf_arena.schemas import Phase
 from werewolf_arena.web import RoomConflictError, RoomStore, build_server
@@ -96,6 +97,22 @@ class WerewolfWebTests(unittest.TestCase):
 
         self.assertTrue(room.wait_until_done(timeout=2.0))
         self.assertIn(room.snapshot(after=0)["state"]["status"], {"COMPLETED", "DRAW"})
+        store.close()
+
+    def test_llm_room_creates_six_policies_and_collects_redacted_requests(self):
+        adapter = ScriptedModelAdapter(['{"action_type": "noop"}'])
+        store = RoomStore(policy_mode="llm", model_adapter=adapter, step_interval=60.0)
+        room = store.create(seed=7)
+
+        room.step_once()
+        snapshot = room.snapshot(after=0, request_after=0)
+
+        self.assertEqual(snapshot["policy_mode"], "llm")
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertEqual(snapshot["request_cursor"], 2)
+        self.assertEqual(len(snapshot["llm_requests"]), 2)
+        self.assertNotIn("Prompt", json.dumps(snapshot["llm_requests"]))
+        self.assertNotIn('{"action_type": "noop"}', json.dumps(snapshot["llm_requests"]))
         store.close()
 
     def test_http_create_start_and_incremental_audit(self):

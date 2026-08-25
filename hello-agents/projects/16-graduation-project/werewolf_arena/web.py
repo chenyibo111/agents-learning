@@ -9,12 +9,14 @@ from pathlib import Path
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
 from .engine import GameEngine
+from .policies import LLMPolicy, ModelAdapter
 from .rules import finish_draw, initial_game
 from .schemas import GameState
+from .storage import RequestTraceStore
 
 
 HTML_PATH = Path(__file__).with_name("web.html")
@@ -32,14 +34,68 @@ class InvalidCursorError(ValueError):
     """事件增量游标不是非负整数。"""
 
 
+class RequestTraceCollector:
+    """保存脱敏的逻辑请求摘要，并为 API 提供独立游标。"""
+
+    def __init__(self, path: Path | None = None):
+        self._lock = threading.RLock()
+        self._records: list[dict[str, Any]] = []
+        self._store = RequestTraceStore(path) if path is not None else None
+
+    def append(self, record: dict[str, Any]) -> None:
+        safe_record = dict(record)
+        with self._lock:
+            self._records.append(safe_record)
+            if self._store is not None:
+                self._store.append(safe_record)
+
+    def snapshot(self, after: int = 0) -> tuple[list[dict[str, Any]], int]:
+        if after < 0:
+            raise InvalidCursorError("request_after must be a non-negative integer")
+        with self._lock:
+            return list(self._records[after:]), len(self._records)
+
+
+def _build_policies(
+    state: GameState,
+    policy_mode: str,
+    model_adapter: ModelAdapter | None,
+    on_request,
+) -> dict[str, LLMPolicy]:
+    """按服务端选定模式创建每名玩家的 Policy。"""
+    if policy_mode == "rule":
+        return {}
+    if policy_mode != "llm":
+        raise ValueError("policy_mode must be rule or llm")
+    if model_adapter is None:
+        raise ValueError("llm policy mode requires a model adapter")
+    return {
+        player.player_id: LLMPolicy(player.player_id, model_adapter, on_request=on_request)
+        for player in state.players
+    }
+
+
 class Room:
     """持有完整 GameState，并在后台按阶段自动推进。"""
 
-    def __init__(self, state: GameState, *, step_interval: float = 0.5, max_rounds: int = 4):
+    def __init__(
+        self,
+        state: GameState,
+        *,
+        step_interval: float = 0.5,
+        max_rounds: int = 4,
+        policies: Mapping[str, Any] | None = None,
+        policy_mode: str = "rule",
+        model_name: str = "",
+        request_collector: RequestTraceCollector | None = None,
+    ):
         self.state = state
-        self.engine = GameEngine(seed=state.seed)
+        self.engine = GameEngine(seed=state.seed, policies=policies)
         self.step_interval = max(0.0, float(step_interval))
         self.max_rounds = max(1, int(max_rounds))
+        self.policy_mode = policy_mode
+        self.model_name = model_name
+        self.request_collector = request_collector or RequestTraceCollector()
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._done_event = threading.Event()
@@ -108,29 +164,47 @@ class Room:
             return True
         return self._done_event.wait(timeout=max(0.0, timeout))
 
-    def snapshot(self, after: int = 0) -> dict[str, Any]:
+    def snapshot(self, after: int = 0, request_after: int = 0) -> dict[str, Any]:
         """返回完整审计状态和指定游标之后的事件。"""
         if after < 0:
             raise InvalidCursorError("after must be a non-negative integer")
         with self._lock:
             events = self.state.events[after:]
+            request_records, request_cursor = self.request_collector.snapshot(request_after)
             return {
                 "game_id": self.state.game_id,
+                "policy_mode": self.policy_mode,
+                "model": self.model_name or None,
                 "state": self.state.to_dict(),
                 "events": [event.to_dict() for event in events],
                 "cursor": len(self.state.events),
+                "llm_requests": request_records,
+                "request_cursor": request_cursor,
                 "running": self.running,
                 "worker_error": self.worker_error,
+                "artifacts": {},
             }
 
 
 class RoomStore:
     """服务实例内最多维护一个活动房间。"""
 
-    def __init__(self, *, step_interval: float = 0.5, max_rounds: int = 4, default_seed: int = 7):
+    def __init__(
+        self,
+        *,
+        step_interval: float = 0.5,
+        max_rounds: int = 4,
+        default_seed: int = 7,
+        policy_mode: str = "rule",
+        model_adapter: ModelAdapter | None = None,
+    ):
+        if policy_mode not in {"rule", "llm"}:
+            raise ValueError("policy_mode must be rule or llm")
         self.step_interval = step_interval
         self.max_rounds = max_rounds
         self.default_seed = default_seed
+        self.policy_mode = policy_mode
+        self.model_adapter = model_adapter
         self._lock = threading.RLock()
         self._room: Room | None = None
 
@@ -140,10 +214,18 @@ class RoomStore:
                 raise RoomConflictError("an active room already exists")
             if self._room is not None:
                 self._room.stop()
+            state = initial_game(self.default_seed if seed is None else seed)
+            collector = RequestTraceCollector()
+            policies = _build_policies(state, self.policy_mode, self.model_adapter, collector.append)
+            model_name = getattr(self.model_adapter, "model", "") if self.policy_mode == "llm" else ""
             self._room = Room(
-                initial_game(self.default_seed if seed is None else seed),
+                state,
                 step_interval=self.step_interval,
                 max_rounds=self.max_rounds,
+                policies=policies,
+                policy_mode=self.policy_mode,
+                model_name=model_name,
+                request_collector=collector,
             )
             return self._room
 
